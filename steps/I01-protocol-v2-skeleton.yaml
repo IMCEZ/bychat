@@ -1,0 +1,224 @@
+iteration: I01
+name: protocol-v2骨架
+source_backlog: BACKLOG.yaml
+goal: 在不破坏当前可运行APK的前提下，建立protocol-v2的数据模型、编解码、版本与错误码基础，为后续可靠网络会话和安全登录铺路
+language: Kotlin
+serialization: Gson（沿用现有依赖，不新增库）
+
+global_rules:
+  must_not_touch:
+    - app/build.gradle 的依赖项（本迭代不加新依赖）
+    - AudioController.kt
+    - Security.kt
+    - LocalDb.kt 的表结构
+    - .github/workflows/build.yml
+    - gradle.properties
+  must_keep_compiling: 每个步骤结束后 assembleDebug 必须通过
+  language_of_ui_text: 简体中文
+  no_placeholder: 禁止TODO、空实现、假返回、注释占位
+  package_root: com.bychat.app
+
+steps:
+
+  - id: I01-S01
+    backlog: P01-E01-T01
+    title: 建立protocol包目录与包结构约定
+    what_to_do:
+      - 在 app/src/main/java/com/bychat/app 下新建 protocol 子包目录
+      - 新建占位说明文件 protocol/package-info放入包级KDoc注释的Kotlin文件 ProtocolPackage.kt，仅含package声明与文件头注释，说明该包只放协议数据与编解码，不含Android依赖
+    technology: Kotlin纯JVM代码，不导入android.*
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/protocol/ProtocolPackage.kt
+    must_not_touch:
+      - 现有任何.kt文件
+    boundary:
+      - 本步只建目录与包，不写任何逻辑
+      - protocol包内严禁import android.*，保证可被纯JVM单元测试引用
+    expected_result:
+      - 存在protocol包，内含一个仅声明包的Kotlin文件
+    self_check:
+      - 命令 ls app/src/main/java/com/bychat/app/protocol 显示 ProtocolPackage.kt
+      - grep -r "import android" app/src/main/java/com/bychat/app/protocol 无输出
+
+  - id: I01-S02
+    backlog: P01-E02-T01
+    title: 定义协议版本与能力常量
+    what_to_do:
+      - 新建 protocol/ProtocolVersion.kt
+      - 定义 const PROTOCOL_VERSION = 2
+      - 定义 const MIN_SUPPORTED_PROTOCOL = 2
+      - 定义 ServerCapability 枚举，含 VOICE_MESSAGE、IMAGE_MESSAGE、FILE_MESSAGE、MULTI_COMMUNITY、REACTIONS、EDIT_MESSAGE、DELETE_MESSAGE，每个枚举带稳定字符串wireName
+      - 定义 capabilitiesToWire与wireToCapabilities两个纯函数做集合与字符串列表互转，遇未知能力名忽略而不抛异常
+    technology: Kotlin enum与顶层函数
+    touch:
+      - 新增 protocol/ProtocolVersion.kt
+    must_not_touch:
+      - Models.kt（本步不动旧Packet）
+    boundary:
+      - 只定义版本与能力，不涉及数据包结构
+      - 未知能力必须安全忽略，保证向前兼容
+    expected_result:
+      - 可通过wireName稳定序列化能力集合，反序列化对未知项容错
+    self_check:
+      - 在下一步的测试里覆盖，本步仅需 assembleDebug 通过
+      - grep "PROTOCOL_VERSION = 2" 命中
+
+  - id: I01-S03
+    backlog: P01-E02-T02
+    title: 定义ID与时间基础类型
+    what_to_do:
+      - 新建 protocol/Ids.kt
+      - 定义 object IdGen，含 newRequestId返回r-加UUID、newEventId返回e-加UUID、newMessageClientId返回c-加UUID
+      - 定义 nowEpochMillis纯函数封装System.currentTimeMillis便于测试替换（用可注入的Clock参数，默认取系统时钟）
+      - 时间字段统一使用epochMillis的Long，规范注释说明单位为毫秒UTC
+    technology: Kotlin object、java.util.UUID、可选Clock参数
+    touch:
+      - 新增 protocol/Ids.kt
+    must_not_touch:
+      - 其他文件
+    boundary:
+      - 只负责ID与时间，不负责数据包
+      - 不引入随机数安全性要求，ID仅用于关联不用于安全
+    expected_result:
+      - 三类ID有稳定前缀且唯一，时间统一毫秒
+    self_check:
+      - grep 前缀 r- e- c- 均命中
+      - assembleDebug通过
+
+  - id: I01-S04
+    backlog: P01-E02-T03
+    title: 定义protocol-v2数据包封装Envelope与payload基类
+    what_to_do:
+      - 新建 protocol/Envelope.kt
+      - 定义顶层信封 data class Envelope，字段：v协议版本Int、type字符串、id字符串、ts时间Long、payload为JsonElement或字符串载荷，error可空
+      - 定义 sealed标识各payload的type常量集合 object PacketType，含 HELLO、HELLO_ACK、AUTH_CHALLENGE、AUTH_REQUEST、AUTH_RESULT、READY、MESSAGE_SEND、MESSAGE_EVENT、SYNC_REQUEST、SYNC_BATCH、MEMBER_EVENT、ADMIN_COMMAND、ADMIN_RESULT、PING、PONG、ERROR
+      - 定义各payload的data class：Hello含clientVersion与supportedProtocol；HelloAck含serverProtocol与capabilities列表；Ping含nonce；Pong含nonce；其余payload本迭代先定义最小字段占位真实字段（不得空实现，字段按语义给出：如MessageSend含channel、clientId、kind、text；MessageEvent含eventId、seq、channel、senderId、kind、text、ts）
+    technology: Kotlin data class，Gson的JsonElement承载payload
+    touch:
+      - 新增 protocol/Envelope.kt
+      - 新增 protocol/Payloads.kt 存放各payload data class
+    must_not_touch:
+      - Models.kt旧Packet与Message保持不变，二者并存
+    boundary:
+      - 本迭代protocol-v2与旧Packet并行存在，互不引用
+      - 不接线到ChatClient或ChatServer，只是数据定义
+      - payload字段以语义完整为准，避免命名为foo或占位
+    expected_result:
+      - 有完整可序列化的信封与主要payload类型定义
+    self_check:
+      - grep PacketType中的15个常量全部命中
+      - assembleDebug通过
+
+  - id: I01-S05
+    backlog: P01-E02-T03
+    title: 实现Envelope编解码器
+    what_to_do:
+      - 新建 protocol/ProtocolCodec.kt
+      - 提供 encode(type, id, ts, payloadObj, error) 返回单行JSON字符串，末尾不含换行
+      - 提供 decode(line) 返回解析后的Envelope，非法JSON抛出受控异常ProtocolException（在下一步定义前先临时用IllegalArgumentException，S06落地后替换）
+      - 提供 decodePayload<T>(envelope, clazz) 将payload反序列化为具体类型
+      - 强制校验：v字段缺失或不等于支持范围时返回可识别结果（先抛IllegalArgumentException，S06替换为错误码）
+    technology: Gson单实例复用，避免每次new
+    touch:
+      - 新增 protocol/ProtocolCodec.kt
+    must_not_touch:
+      - 现有网络代码
+    boundary:
+      - 编解码不做IO，只处理字符串与对象
+      - 不允许吞异常返回null导致静默失败
+    expected_result:
+      - 对象可编码为单行JSON并可无损解码回来
+    self_check:
+      - 由I01-S08的单元测试覆盖往返一致性
+      - assembleDebug通过
+
+  - id: I01-S06
+    backlog: P01-E02-T04
+    title: 定义稳定错误码与协议异常
+    what_to_do:
+      - 新建 protocol/ProtocolError.kt
+      - 定义 enum ErrorCode，含稳定code整数与wire字符串：OK=0、BAD_REQUEST、UNSUPPORTED_PROTOCOL、UNAUTHORIZED、FORBIDDEN、NOT_FOUND、RATE_LIMITED、PAYLOAD_TOO_LARGE、INTERNAL、CONFLICT，每项带retryable布尔与默认中文userMessage
+      - 定义 class ProtocolException(val code: ErrorCode, message: String) : Exception(message)
+      - 回到 ProtocolCodec.kt，将S05中的临时IllegalArgumentException替换为ProtocolException并带正确ErrorCode（版本不符用UNSUPPORTED_PROTOCOL，解析失败用BAD_REQUEST）
+    technology: Kotlin enum与自定义Exception
+    touch:
+      - 新增 protocol/ProtocolError.kt
+      - 修改 protocol/ProtocolCodec.kt（仅替换异常类型）
+    must_not_touch:
+      - protocol包外文件
+    boundary:
+      - 错误码为对外协议约定，数值与wire字符串一经定义不得随意变动
+      - userMessage面向终端用户须为中文
+    expected_result:
+      - 编解码错误以ProtocolException加明确ErrorCode抛出
+    self_check:
+      - grep 10个ErrorCode项全部命中
+      - grep retryable 命中
+      - assembleDebug通过
+
+  - id: I01-S07
+    backlog: P01-E01-T04
+    title: 定义统一Result与Logger接口
+    what_to_do:
+      - 新建 protocol/Outcome.kt，定义 sealed class Outcome<out T>，含 Success(value) 与 Failure(code: ErrorCode, message: String)，提供map、getOrNull、isSuccess等最小工具
+      - 新建 utils/BLog.kt（放utils包），封装android.util.Log，提供 d/i/w/e，统一TAG前缀Bychat，并提供可关闭开关，release下默认只输出w与e
+      - 说明：Outcome放protocol包因为无android依赖；BLog放utils包因依赖android.util.Log
+    technology: Kotlin sealed class；android.util.Log
+    touch:
+      - 新增 protocol/Outcome.kt
+      - 新增 utils/BLog.kt
+    must_not_touch:
+      - 尚不改造现有类去使用它们，仅提供基础设施
+    boundary:
+      - Outcome严禁import android，保证协议层纯净
+      - BLog允许import android
+      - 本步不替换现有代码里的Log调用，避免扩大改动面
+    expected_result:
+      - 具备统一结果类型与日志封装，供后续迭代使用
+    self_check:
+      - grep -r "import android" protocol/Outcome.kt 无输出
+      - grep "object BLog\|class BLog" 命中
+      - assembleDebug通过
+
+  - id: I01-S08
+    backlog: P01-E02-T05
+    title: 建立单元测试并编写protocol-v2往返测试与规范文档
+    what_to_do:
+      - 若无测试源集，创建 app/src/test/java/com/bychat/app/protocol 目录
+      - 在 app/build.gradle 的dependencies中，仅添加testImplementation junit（检查是否已存在，避免重复；不改动其他依赖）
+      - 新建 ProtocolCodecTest.kt，覆盖：Hello与Ping往返编解码一致；未知能力名被安全忽略；版本不符抛UNSUPPORTED_PROTOCOL；非法JSON抛BAD_REQUEST
+      - 新建文档 docs/protocol-v2.md，用中文描述信封结构、PacketType列表、错误码表、能力协商与示例数据包
+    technology: JUnit4本地单元测试，Gradle testDebugUnitTest
+    touch:
+      - 新增 app/src/test/java/com/bychat/app/protocol/ProtocolCodecTest.kt
+      - 可能新增 testImplementation junit到app/build.gradle（若缺失）
+      - 新增 docs/protocol-v2.md
+    must_not_touch:
+      - 生产代码逻辑（测试若发现bug，修复归入对应步骤而非本步偷改）
+    boundary:
+      - 测试必须真实断言，禁止assertTrue(true)式空测试
+      - 文档需与代码常量一致
+    expected_result:
+      - 本地单元测试通过，protocol-v2有中文规范文档
+    self_check:
+      - 命令 ./gradlew testDebugUnitTest 通过（CI或本地Java环境）
+      - 至少4个测试用例
+      - assembleDebug通过
+
+verification_strategy:
+  per_step:
+    - 只读改动文件确认边界未越界
+    - 运行 grep 关键符号确认落地
+  per_iteration_end:
+    - 推送触发GitHub Actions的assembleDebug
+    - 若含测试步骤，确保testDebugUnitTest已在工作流中执行（如未执行，纳入I01-S08或后续P13处理）
+  token_thrift:
+    - 自检优先用grep与wc而非整文件回显
+    - 只在编译失败时读取报错相关文件
+
+exit_criteria:
+  - protocol包内8个步骤全部done
+  - protocol-v2数据模型、编解码、版本、错误码、Result、日志基础齐备
+  - 旧Packet与新Envelope并存且APK仍可构建运行
+  - 存在通过的单元测试与中文协议文档
+  - 未触碰must_not_touch清单中的任何文件
