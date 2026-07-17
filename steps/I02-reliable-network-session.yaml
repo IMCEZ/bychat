@@ -1,0 +1,836 @@
+iteration: I02
+name: 可靠网络会话
+source_backlog: BACKLOG.yaml
+prerequisite:
+  required_commit: 14497df
+  required_files:
+    - app/src/main/java/com/bychat/app/protocol/Envelope.kt
+    - app/src/main/java/com/bychat/app/protocol/ProtocolCodec.kt
+    - app/src/main/java/com/bychat/app/protocol/ProtocolError.kt
+    - app/src/main/java/com/bychat/app/protocol/Payloads.kt
+  preflight:
+    - GitHub Actions最近一次assembleDebug必须成功
+    - ProtocolCodecTest必须通过
+    - 工作区必须无未提交改动
+goal: 建立可测试的protocol-v2二进制帧、连接状态机、心跳、超时、重连、会话恢复和端点解析层；保持旧版聊天链路可运行，不在本迭代切换MainActivity与ChatServer
+language: Kotlin
+runtime:
+  production: Android 10+
+  tests: JVM JUnit4
+  dependencies: Java标准网络与并发库、Kotlin标准库、现有Gson
+
+non_negotiable_rules:
+  - 禁止TODO、FIXME、NotImplementedError、空方法、固定假返回和注释代替逻辑
+  - 每一步只修改touch列出的文件
+  - 每一步提交前运行git diff --check
+  - 新network核心代码不得import android.*
+  - 不在主线程执行DNS、连接、读写、等待或重试
+  - 所有线程、Socket、流和定时任务必须有明确关闭路径
+  - 所有长度、次数、时间和队列必须有上限
+  - 所有回调只触发一次语义必须由原子状态保证
+  - 协议错误不得直接泄露堆栈或内部异常给最终用户
+  - 旧Packet链路在本迭代结束前保持原样可用
+
+global_must_not_touch:
+  - app/src/main/java/com/bychat/app/MainActivity.kt
+  - app/src/main/java/com/bychat/app/ChatClient.kt
+  - app/src/main/java/com/bychat/app/ChatServer.kt
+  - app/src/main/java/com/bychat/app/HostService.kt
+  - app/src/main/java/com/bychat/app/LocalDb.kt
+  - app/src/main/java/com/bychat/app/Security.kt
+  - app/src/main/java/com/bychat/app/AudioController.kt
+  - app/src/main/java/com/bychat/app/Models.kt
+  - app/src/main/AndroidManifest.xml
+  - app/src/main/res
+  - .github/workflows/build.yml
+  - gradle.properties
+  - 数据库结构与版本号
+  - 旧JSON Lines协议行为
+
+constants:
+  max_frame_bytes: 1048576
+  max_pending_writes: 128
+  connect_timeout_ms: 10000
+  handshake_timeout_ms: 10000
+  auth_timeout_ms: 15000
+  heartbeat_interval_ms: 25000
+  heartbeat_timeout_ms: 10000
+  idle_timeout_ms: 75000
+  reconnect_base_ms: 1000
+  reconnect_max_ms: 60000
+  reconnect_multiplier: 2.0
+  reconnect_jitter_ratio: 0.20
+  max_reconnect_attempts: 8
+  sync_batch_limit: 200
+
+steps:
+  - id: I02-S01
+    backlog:
+      - P01-E01-T02
+      - P01-E03-T02
+    title: 定义纯Kotlin网络会话契约
+    objective: 先固定上层可依赖的接口，隔离Socket与未来UI
+    what_to_do:
+      - 新建network包
+      - 定义SessionState密封类型：Idle、Resolving、Connecting、Handshaking、Authenticating、Ready、Reconnecting、Closing、Closed
+      - 为带参数状态定义不可空字段，例如Connecting含Endpoint，Reconnecting含attempt和delayMillis，Closed含CloseReason
+      - 定义CloseReason枚举：USER_REQUEST、REMOTE_CLOSED、NETWORK_ERROR、PROTOCOL_ERROR、AUTH_FAILED、TIMEOUT、RETRY_EXHAUSTED
+      - 定义SessionListener接口：onStateChanged、onEnvelope、onClosed
+      - 定义ClientSession接口：state、connect、send、close
+      - connect参数使用ConnectionRequest而不是散落参数
+      - send返回Outcome<Unit>，未Ready时明确返回CONFLICT
+    technology:
+      - Kotlin sealed interface
+      - Kotlin data class
+      - I01的Envelope、Outcome和ErrorCode
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/network/SessionContract.kt
+    must_not_touch:
+      - protocol包
+      - 所有旧聊天文件
+    boundary:
+      - 接口不包含Android Context、Handler、Looper、View或LiveData
+      - 本步不创建Socket、不启动线程、不实现接口
+      - 不把密码或credential放入ConnectionRequest；认证材料使用后续AuthProvider
+    expected_result:
+      - 上层可只依赖ClientSession和SessionListener观察会话
+      - 状态与关闭原因是强类型而非自由字符串
+    minimal_self_check:
+      - grep -Ec 'sealed (class|interface) SessionState|interface ClientSession|interface SessionListener' 文件结果为3
+      - grep -R '^import android' network目录无输出
+      - git diff --check无输出
+
+  - id: I02-S02
+    backlog:
+      - P01-E03-T06
+    title: 定义并严格校验服务器端点
+    objective: 统一域名、IPv4和IPv6输入，避免各层自行拼接地址
+    what_to_do:
+      - 定义Endpoint，字段host、port、secure
+      - 实现EndpointParser.parse输入格式：host、host:port、[IPv6]、[IPv6]:port
+      - host未带端口时使用明确传入的defaultPort
+      - 去除首尾空白，拒绝空host、控制字符、路径、查询参数、用户信息和越界端口
+      - 接受Unicode域名输入但使用IDN.toASCII做连接主机规范化
+      - IPv6只能使用方括号表达带端口形式，消除冒号歧义
+      - Endpoint保留displayHost供UI未来显示，connectHost用于解析连接
+    technology:
+      - java.net.IDN
+      - Kotlin Regex仅用于结构识别，不用单个复杂正则验证全部IP语法
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/network/Endpoint.kt
+      - 新增 app/src/test/java/com/bychat/app/network/EndpointTest.kt
+    must_not_touch:
+      - Android界面
+      - Manifest网络配置
+    boundary:
+      - 本步只解析与校验，不做DNS查询、不探测网络
+      - 不接受http://或https:// URL；端点不是网页地址
+    expected_result:
+      - 域名、IPv4、IPv6都转换成唯一Endpoint
+      - 危险或歧义输入返回BAD_REQUEST
+    minimal_self_check:
+      - grep -c '@Test' EndpointTest.kt不少于8
+      - ./gradlew testDebugUnitTest --tests '*EndpointTest'通过
+
+  - id: I02-S03
+    backlog:
+      - P01-E03-T01
+      - P01-E04-T04
+    title: 实现长度前缀帧写入器
+    objective: 用4字节大端长度前缀替代换行边界并限制发送大小
+    what_to_do:
+      - 定义FrameLimits并提供默认MAX_FRAME_BYTES为1048576
+      - 实现FrameWriter.write(output, bytes)
+      - 在写任何内容前检查bytes大小必须为1到maxFrameBytes
+      - 写入4字节有符号大端正整数长度，再写完整payload并flush
+      - 使用同步锁保证同一writer多线程发送时帧不会交错
+      - 将越界映射为ProtocolException(PAYLOAD_TOO_LARGE)
+      - 将IOException原样交给会话层处理，不吞异常
+    technology:
+      - DataOutputStream
+      - synchronized锁
+      - ProtocolException
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/network/FrameLimits.kt
+      - 新增 app/src/main/java/com/bychat/app/network/FrameWriter.kt
+      - 新增 app/src/test/java/com/bychat/app/network/FrameWriterTest.kt
+    must_not_touch:
+      - ProtocolCodec编码结构
+      - 旧BufferedWriter发送逻辑
+    boundary:
+      - FrameWriter处理ByteArray，不理解JSON和Envelope
+      - 不负责队列、线程和重试
+    expected_result:
+      - 任意合法payload被编码为4字节长度加原始内容
+      - 空帧与超限帧在写流前被拒绝
+    minimal_self_check:
+      - 测试覆盖长度字节、payload一致、空帧、超限帧和并发不交错
+      - ./gradlew testDebugUnitTest --tests '*FrameWriterTest'通过
+
+  - id: I02-S04
+    backlog:
+      - P01-E03-T01
+      - P01-E04-T04
+    title: 实现长度前缀帧读取器
+    objective: 安全读取完整帧并阻断负长度、零长度、超限和截断输入
+    what_to_do:
+      - 实现FrameReader.read(input)返回ByteArray，正常EOF且尚未读取长度时返回null
+      - 使用readInt读取大端长度
+      - 长度小于1抛BAD_REQUEST，大于上限抛PAYLOAD_TOO_LARGE
+      - 使用readFully读取payload，半帧EOF转换为ProtocolException(BAD_REQUEST)
+      - 禁止按声明长度之外多读数据
+      - 为连续多帧读取验证边界
+    technology:
+      - DataInputStream
+      - EOFException
+      - ProtocolException
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/network/FrameReader.kt
+      - 新增 app/src/test/java/com/bychat/app/network/FrameReaderTest.kt
+    must_not_touch:
+      - FrameWriter已验证逻辑，除非测试证明存在缺陷
+      - 旧BufferedReader读取逻辑
+    boundary:
+      - Reader不自行分配超过maxFrameBytes的数组
+      - Reader不解析UTF-8或JSON
+    expected_result:
+      - 合法连续帧可逐个读取
+      - 恶意长度不会导致无界内存分配
+    minimal_self_check:
+      - 测试覆盖EOF、连续帧、零、负数、超限、截断
+      - ./gradlew testDebugUnitTest --tests '*FrameReaderTest'通过
+
+  - id: I02-S05
+    backlog:
+      - P01-E03-T01
+      - P01-E04-T05
+    title: 连接Frame与ProtocolCodec
+    objective: 提供Envelope级读写而不让会话重复处理UTF-8和异常映射
+    what_to_do:
+      - 新建ProtocolTransport，组合FrameReader、FrameWriter和ProtocolCodec
+      - send将Envelope所需参数编码为严格UTF-8后写帧
+      - receive读取帧、使用严格UTF-8解码并调用ProtocolCodec.decode
+      - 使用CharsetDecoder的REPORT策略拒绝非法UTF-8而不是替换字符
+      - receive在干净EOF时返回null，协议错误抛ProtocolException
+      - 允许测试注入InputStream和OutputStream
+    technology:
+      - StandardCharsets.UTF_8
+      - CodingErrorAction.REPORT
+      - I01 ProtocolCodec
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/network/ProtocolTransport.kt
+      - 新增 app/src/test/java/com/bychat/app/network/ProtocolTransportTest.kt
+    must_not_touch:
+      - ProtocolCodec公共JSON格式
+      - 旧网络实现
+    boundary:
+      - Transport不拥有Socket生命周期
+      - Transport不启动线程、不维护状态、不重连
+    expected_result:
+      - Envelope经二进制帧往返后字段一致
+      - 非法UTF-8、非法JSON和超限帧得到稳定错误码
+    minimal_self_check:
+      - 测试至少覆盖正常往返、非法UTF-8、非法JSON、超限
+      - ./gradlew testDebugUnitTest --tests '*ProtocolTransportTest'通过
+
+  - id: I02-S06
+    backlog:
+      - P01-E03-T02
+    title: 实现线程安全连接状态机
+    objective: 集中控制合法状态转换，消除重复关闭与乱序回调
+    what_to_do:
+      - 新建SessionStateMachine
+      - 用ReentrantLock保护当前状态
+      - 定义合法转换表
+      - Idle只能到Resolving或Closed
+      - Resolving到Connecting、Reconnecting、Closing或Closed
+      - Connecting到Handshaking、Reconnecting、Closing或Closed
+      - Handshaking到Authenticating、Reconnecting、Closing或Closed
+      - Authenticating到Ready、Reconnecting、Closing或Closed
+      - Ready到Reconnecting、Closing或Closed
+      - Reconnecting到Resolving、Closing或Closed
+      - Closing只能到Closed
+      - Closed为终态，不允许复活；新连接必须新建会话实例
+      - transition返回旧状态与新状态，非法转换返回Outcome.Failure(CONFLICT)
+    technology:
+      - ReentrantLock
+      - Outcome
+      - 纯JVM状态机
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/network/SessionStateMachine.kt
+      - 新增 app/src/test/java/com/bychat/app/network/SessionStateMachineTest.kt
+    must_not_touch:
+      - SessionContract的既定状态名称，发现缺陷需单独提交说明
+    boundary:
+      - 状态机不执行网络IO和回调
+      - 不以ordinal判断状态，显式定义合法边
+    expected_result:
+      - 并发状态变化只有一个成功路径
+      - 非法跳转可预测地失败
+    minimal_self_check:
+      - 测试遍历全部合法边并抽查全部非法边
+      - 包含并发竞争测试且最终只有一次进入Closed
+      - ./gradlew testDebugUnitTest --tests '*SessionStateMachineTest'通过
+
+  - id: I02-S07
+    backlog:
+      - P01-E03-T02
+      - P01-E03-T06
+    title: 实现可取消DNS解析与Socket连接抽象
+    objective: 将真实网络建立封装为可替换组件并保证关闭可中止连接
+    what_to_do:
+      - 定义SocketConnector接口
+      - 实现DefaultSocketConnector，使用InetAddress.getAllByName获得IPv4与IPv6候选
+      - 按候选逐个连接，每个候选使用剩余总超时时间而非每个都完整超时
+      - Socket配置tcpNoDelay、keepAlive和读超时
+      - connect接受CancellationSignal；取消时关闭正在连接的Socket
+      - 所有候选失败时抛最后IOException并保留其他异常为suppressed
+      - 测试用FakeSocketConnector，不依赖公网
+    technology:
+      - InetAddress
+      - InetSocketAddress
+      - Socket
+      - AtomicBoolean
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/network/CancellationSignal.kt
+      - 新增 app/src/main/java/com/bychat/app/network/SocketConnector.kt
+      - 新增 app/src/test/java/com/bychat/app/network/CancellationSignalTest.kt
+    must_not_touch:
+      - TLS实现，属于I03安全身份前的独立安全步骤
+      - Android ConnectivityManager
+    boundary:
+      - DNS本身在JVM API下不可硬中断，因此整个connect必须运行在会话IO线程；取消后忽略迟到结果并关闭Socket
+      - 不实现Happy Eyeballs并行连接，避免本轮复杂度失控
+    expected_result:
+      - 域名、IPv4、IPv6候选可连接
+      - 用户取消后不会留下活动Socket
+    minimal_self_check:
+      - 测试覆盖取消只触发一次、注册后取消、取消后注册立即执行
+      - grep -R '^import android' network目录无输出
+
+  - id: I02-S08
+    backlog:
+      - P01-E03-T02
+    title: 定义握手和认证提供者边界
+    objective: 让可靠会话完成状态流程，但不在I02实现最终Ed25519身份
+    what_to_do:
+      - 定义AuthProvider接口，方法createAuthRequest(challenge)返回Outcome<AuthRequestPayload>
+      - 定义SessionResumeStore接口，按Endpoint读取和保存ResumeState
+      - ResumeState只含sessionToken、communityId、lastSyncCursor、expiresAt
+      - ConnectionRequest含Endpoint、clientVersion、communityId、capabilities、AuthProvider、SessionResumeStore
+      - AuthProvider不得暴露密码、私钥或本地credential
+      - 新增测试用FakeAuthProvider，使用固定公钥与签名只用于测试源集
+    technology:
+      - 依赖倒置
+      - protocol payload
+      - 测试Fake
+    touch:
+      - 修改 app/src/main/java/com/bychat/app/network/SessionContract.kt
+      - 新增 app/src/main/java/com/bychat/app/network/AuthProvider.kt
+      - 新增 app/src/main/java/com/bychat/app/network/SessionResumeStore.kt
+      - 新增 app/src/test/java/com/bychat/app/network/Fakes.kt
+    must_not_touch:
+      - Security.kt
+      - LocalDb.kt
+      - 生产代码中禁止固定测试签名或测试令牌
+    boundary:
+      - I02只定义身份输入边界；真正Ed25519密钥、挑战校验和令牌安全由I03实现
+      - SessionResumeStore本轮可提供内存实现用于会话测试，不落数据库
+    expected_result:
+      - 会话层不知道密码和私钥如何存储
+      - 后续身份模块可替换AuthProvider而无需改网络状态机
+    minimal_self_check:
+      - grep -R -Ei 'password|credential' network生产目录无输出
+      - 固定测试密钥只出现在src/test
+
+  - id: I02-S09
+    backlog:
+      - P01-E03-T02
+    title: 实现握手认证主流程
+    objective: 从Socket连接推进到Ready并严格验证数据包顺序
+    what_to_do:
+      - 新建V2ClientSession实现ClientSession
+      - 使用单线程Executor串行执行连接状态与读循环
+      - 连接后发送HELLO，等待HELLO_ACK并校验协议版本
+      - 等待AUTH_CHALLENGE并交给AuthProvider生成AUTH_REQUEST
+      - 发送AUTH_REQUEST并等待AUTH_RESULT
+      - authenticated为false或error非空时以AUTH_FAILED关闭
+      - 等待READY，保存sessionId、communityId和syncCursor后进入Ready
+      - 任一阶段收到不符合预期type的数据包，关闭为PROTOCOL_ERROR
+      - 所有listener回调捕获其异常，监听者异常不得杀死IO线程
+      - onClosed保证全生命周期最多一次
+    technology:
+      - ExecutorService单线程事件循环
+      - SocketConnector
+      - ProtocolTransport
+      - SessionStateMachine
+      - AtomicBoolean
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/network/V2ClientSession.kt
+      - 新增 app/src/test/java/com/bychat/app/network/V2ClientSessionHandshakeTest.kt
+    must_not_touch:
+      - 旧ChatClient
+      - 旧ChatServer
+      - MainActivity
+    boundary:
+      - 本步只实现首次连接，不实现重连、心跳和恢复
+      - 测试使用内存流或本地ServerSocket，禁止访问公网
+    expected_result:
+      - 合法服务器脚本使状态按顺序进入Ready
+      - 错序、拒绝认证和断开都只关闭一次并给出正确原因
+    minimal_self_check:
+      - 测试断言完整状态序列而非仅断言最终Ready
+      - ./gradlew testDebugUnitTest --tests '*V2ClientSessionHandshakeTest'通过
+
+  - id: I02-S10
+    backlog:
+      - P01-E03-T02
+      - P01-E04-T04
+    title: 实现有界发送队列与单写线程规则
+    objective: 防止并发发送交错和无限待发送数据耗尽内存
+    what_to_do:
+      - 在V2ClientSession内增加容量128的ArrayBlockingQueue
+      - send只在Ready接收业务包；PING、认证等内部包由会话事件循环发送
+      - 业务发送入队成功返回Success，队列满返回RATE_LIMITED
+      - IO线程按顺序排空队列并调用ProtocolTransport
+      - close时清空队列并拒绝后续send
+      - 发送IOException触发统一网络失败关闭，不进行重复通知
+    technology:
+      - ArrayBlockingQueue
+      - 单写者模型
+    touch:
+      - 修改 app/src/main/java/com/bychat/app/network/V2ClientSession.kt
+      - 新增 app/src/test/java/com/bychat/app/network/V2ClientSessionSendTest.kt
+    must_not_touch:
+      - FrameWriter帧格式
+      - 对外ClientSession方法签名
+    boundary:
+      - 不为每条消息创建线程
+      - 不在调用send的线程直接写Socket
+      - 不缓存超过128条待发送Envelope
+    expected_result:
+      - 多线程调用send仍保持完整帧
+      - 队列过载可控失败而非内存增长
+    minimal_self_check:
+      - 测试覆盖未Ready、队列满、Ready发送和关闭后发送
+      - ./gradlew testDebugUnitTest --tests '*V2ClientSessionSendTest'通过
+
+  - id: I02-S11
+    backlog:
+      - P01-E03-T03
+    title: 实现可替换时钟与任务调度器
+    objective: 让心跳、超时和重连测试不依赖真实等待
+    what_to_do:
+      - 定义MonotonicClock接口，生产实现使用System.nanoTime转换毫秒
+      - 定义TaskScheduler接口：schedule、cancel、close
+      - 生产实现使用单线程ScheduledExecutorService
+      - ScheduledTask.cancel必须幂等
+      - close取消全部未执行任务并关闭executor
+      - 测试实现ManualScheduler支持advanceBy确定性推进时间
+    technology:
+      - ScheduledExecutorService
+      - System.nanoTime
+      - PriorityQueue测试调度器
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/network/Clock.kt
+      - 新增 app/src/main/java/com/bychat/app/network/TaskScheduler.kt
+      - 新增 app/src/test/java/com/bychat/app/network/ManualScheduler.kt
+      - 新增 app/src/test/java/com/bychat/app/network/TaskSchedulerTest.kt
+    must_not_touch:
+      - protocol的nowEpochMillis；协议时间与单调超时时间用途不同
+    boundary:
+      - 超时计算必须用单调时钟，不用系统墙钟
+      - ManualScheduler只存在测试源集
+    expected_result:
+      - 所有定时逻辑可在测试中瞬时推进
+    minimal_self_check:
+      - 测试无Thread.sleep
+      - ./gradlew testDebugUnitTest --tests '*TaskSchedulerTest'通过
+
+  - id: I02-S12
+    backlog:
+      - P01-E03-T02
+      - P01-E03-T03
+    title: 实现分阶段超时
+    objective: 防止DNS后连接、握手、认证和关闭阶段永久挂起
+    what_to_do:
+      - 为Resolving与Connecting应用总connectTimeout
+      - Handshaking进入时启动handshakeTimeout
+      - Authenticating进入时启动authTimeout
+      - 每次成功状态推进取消上一阶段定时任务
+      - 超时任务先核对当前状态和连接代次，避免旧任务关闭新连接
+      - 超时关闭Socket并产生CloseReason.TIMEOUT
+      - close时取消全部阶段任务
+    technology:
+      - TaskScheduler
+      - connectionGeneration长整数
+      - SessionStateMachine
+    touch:
+      - 修改 app/src/main/java/com/bychat/app/network/V2ClientSession.kt
+      - 新增 app/src/test/java/com/bychat/app/network/V2ClientSessionTimeoutTest.kt
+    must_not_touch:
+      - Socket全局默认超时
+      - 旧网络类
+    boundary:
+      - 不使用Thread.sleep
+      - 迟到的成功事件不得覆盖超时后的Closed
+    expected_result:
+      - 每个连接阶段都能确定性超时退出
+      - 已取消的旧超时不会误伤新代连接
+    minimal_self_check:
+      - ManualScheduler推进测试覆盖握手超时、认证超时和旧任务失效
+      - ./gradlew testDebugUnitTest --tests '*V2ClientSessionTimeoutTest'通过
+
+  - id: I02-S13
+    backlog:
+      - P01-E03-T03
+    title: 实现心跳与僵尸连接检测
+    objective: Ready期间检测半开连接并保持NAT映射活跃
+    what_to_do:
+      - 进入Ready后每25秒空闲发送PING，nonce使用请求ID
+      - 收到对应PONG后取消本次heartbeatTimeout并记录lastReceivedAt
+      - 收到任意合法数据包都更新lastReceivedAt
+      - 同时只允许一个未完成PING
+      - PONG nonce不匹配时忽略该PONG但保留超时
+      - 10秒未收到对应PONG触发NETWORK_ERROR以允许后续重连
+      - 75秒没有收到任何数据时判定僵尸连接
+      - 离开Ready或close时取消全部心跳任务
+    technology:
+      - TaskScheduler
+      - MonotonicClock
+      - PingPayload与PongPayload
+    touch:
+      - 修改 app/src/main/java/com/bychat/app/network/V2ClientSession.kt
+      - 新增 app/src/test/java/com/bychat/app/network/V2ClientSessionHeartbeatTest.kt
+    must_not_touch:
+      - Android AlarmManager
+      - WorkManager
+    boundary:
+      - 心跳仅在活动Socket与Ready状态运行
+      - 不把PING暴露给业务onEnvelope
+      - 不因单个不匹配PONG重置存活判定
+    expected_result:
+      - 正常PONG维持连接
+      - 丢失PONG或长期无输入触发可重连断开
+    minimal_self_check:
+      - 测试覆盖正常PONG、错误nonce、超时、业务包刷新空闲和关闭取消
+      - 测试无真实等待
+
+  - id: I02-S14
+    backlog:
+      - P01-E03-T04
+    title: 实现指数退避与随机抖动算法
+    objective: 以纯函数生成可测试、封顶且不会同步风暴的重连延迟
+    what_to_do:
+      - 新建ReconnectPolicy
+      - 第1次失败基础延迟1000ms，之后乘2，最大60000ms
+      - 应用正负20%抖动
+      - 注入RandomSource，生产使用SecureRandom或ThreadLocalRandom，测试使用固定序列
+      - 对attempt小于1拒绝BAD_REQUEST
+      - 防止乘法溢出，先封顶再抖动并确保结果非负
+      - 最大自动尝试次数为8，可由构造参数降低但不得小于1
+    technology:
+      - 纯Kotlin算法
+      - RandomSource接口
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/network/ReconnectPolicy.kt
+      - 新增 app/src/test/java/com/bychat/app/network/ReconnectPolicyTest.kt
+    must_not_touch:
+      - V2ClientSession，本步只实现算法
+    boundary:
+      - 算法不调度任务、不判断网络类型
+      - attempt在一次成功Ready后重置由会话层负责
+    expected_result:
+      - 延迟指数增长、封顶并处于抖动范围
+    minimal_self_check:
+      - 使用固定RandomSource断言前8次精确结果和边界
+      - ./gradlew testDebugUnitTest --tests '*ReconnectPolicyTest'通过
+
+  - id: I02-S15
+    backlog:
+      - P01-E03-T04
+      - P01-E03-T06
+    title: 接入自动重连、用户取消和代次隔离
+    objective: 网络故障后自动恢复，同时保证用户关闭立即终止全部重连
+    what_to_do:
+      - 网络错误、心跳超时和远端意外关闭进入Reconnecting
+      - BAD_REQUEST、UNSUPPORTED_PROTOCOL、AUTH_FAILED、FORBIDDEN和用户关闭不得重连
+      - 使用ReconnectPolicy调度下一次connect
+      - 每次连接分配递增generation，所有异步结果先校验generation
+      - 用户close取消当前Socket、连接CancellationSignal、定时任务与待重连任务
+      - 达到8次失败进入Closed(RETRY_EXHAUSTED)
+      - 成功进入Ready后attempt归零
+      - 同一时间只允许一个连接尝试与一个重连任务
+    technology:
+      - ReconnectPolicy
+      - TaskScheduler
+      - AtomicLong generation
+      - CancellationSignal
+    touch:
+      - 修改 app/src/main/java/com/bychat/app/network/V2ClientSession.kt
+      - 新增 app/src/test/java/com/bychat/app/network/V2ClientSessionReconnectTest.kt
+    must_not_touch:
+      - Android ConnectivityManager监听，留到P11
+      - UI重试按钮
+    boundary:
+      - DNS失败、connect失败与读写IOException属于可重试网络错误
+      - 协议和认证失败必须停止，防止无意义攻击式重试
+    expected_result:
+      - 临时网络失败按策略重连并可恢复Ready
+      - 用户关闭和致命错误不会留下后台任务
+    minimal_self_check:
+      - 测试覆盖恢复成功、耗尽、致命错误不重连、关闭取消和旧generation失效
+      - ManualScheduler测试无Thread.sleep
+
+  - id: I02-S16
+    backlog:
+      - P01-E03-T05
+    title: 扩展协议以支持会话恢复请求
+    objective: 让客户端在重连握手时提交令牌和同步游标
+    what_to_do:
+      - 新增PacketType.RESUME_REQUEST与RESUME_RESULT
+      - 定义ResumeRequestPayload：sessionToken、communityId、lastSyncCursor
+      - 定义ResumeResultPayload：resumed、sessionId、syncFromCursor、token、expiresAt
+      - HelloPayload新增可空resumeSupported字段时必须提供默认值，保持旧测试JSON可解码
+      - 更新PacketType.all
+      - 更新protocol-v2文档的数据包类型、流程和示例
+      - 新增Codec往返测试和缺字段失败测试
+    technology:
+      - I01 ProtocolCodec
+      - Gson默认参数兼容原则
+    touch:
+      - 修改 app/src/main/java/com/bychat/app/protocol/Envelope.kt
+      - 修改 app/src/main/java/com/bychat/app/protocol/Payloads.kt
+      - 修改 app/src/test/java/com/bychat/app/protocol/ProtocolCodecTest.kt
+      - 修改 docs/protocol-v2.md
+    must_not_touch:
+      - 现有错误码数值与wireName
+      - 现有PacketType字符串
+    boundary:
+      - 本步只扩展协议模型，不接会话流程
+      - sessionToken不得写日志、错误消息或toString输出；payload需覆写toString隐藏令牌或使用不记录payload的日志规则
+    expected_result:
+      - 恢复请求和结果可稳定编解码
+      - 旧Hello测试保持通过
+    minimal_self_check:
+      - ./gradlew testDebugUnitTest --tests '*ProtocolCodecTest'通过
+      - grep确认PacketType.all包含两个新类型
+
+  - id: I02-S17
+    backlog:
+      - P01-E03-T05
+    title: 接入会话恢复与增量同步起点
+    objective: 重连优先恢复会话，失败时回退完整认证
+    what_to_do:
+      - HELLO_ACK确认支持恢复后读取SessionResumeStore
+      - 只使用未过期且communityId匹配的ResumeState
+      - 有状态时发送RESUME_REQUEST并等待RESUME_RESULT
+      - resumed为true时保存轮换后的token与expiresAt，再等待READY
+      - resumed为false、令牌过期或NOT_FOUND时清除旧状态并进入AUTH_CHALLENGE流程
+      - FORBIDDEN或令牌与社区冲突时停止连接，不静默回退
+      - READY后保存服务器返回的最新syncCursor
+      - 向SessionListener交付Ready后的SYNC_BATCH，网络层只保证顺序不落数据库
+    technology:
+      - SessionResumeStore
+      - Resume payload
+      - SessionStateMachine
+    touch:
+      - 修改 app/src/main/java/com/bychat/app/network/V2ClientSession.kt
+      - 新增 app/src/test/java/com/bychat/app/network/V2ClientSessionResumeTest.kt
+    must_not_touch:
+      - LocalDb
+      - 实际增量事件应用逻辑，属于I05
+    boundary:
+      - I02内存ResumeStore仅用于测试；生产持久化由I03/I04落地
+      - 网络层不解释SYNC_BATCH业务内容
+    expected_result:
+      - 有效令牌重连不需重新签名认证
+      - 普通过期令牌安全回退认证
+      - READY游标可供后续同步层使用
+    minimal_self_check:
+      - 测试覆盖恢复成功、过期跳过、拒绝回退、FORBIDDEN停止和令牌轮换
+      - ./gradlew testDebugUnitTest --tests '*V2ClientSessionResumeTest'通过
+
+  - id: I02-S18
+    backlog:
+      - P01-E04-T04
+    title: 实现连接级输入速率限制
+    objective: 防止单连接通过大量小帧占满CPU和回调队列
+    what_to_do:
+      - 新建TokenBucket，使用MonotonicClock
+      - 默认允许每秒20帧，突发容量40帧
+      - 在ProtocolTransport解码成功后、交付会话状态机前消费令牌
+      - 超限时发送一次RATE_LIMITED错误后关闭为PROTOCOL_ERROR，无法发送错误时直接关闭
+      - TokenBucket所有参数必须验证为正数并防止时间倒退
+      - 不记录消息正文和令牌内容
+    technology:
+      - 令牌桶算法
+      - MonotonicClock
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/network/TokenBucket.kt
+      - 修改 app/src/main/java/com/bychat/app/network/V2ClientSession.kt
+      - 新增 app/src/test/java/com/bychat/app/network/TokenBucketTest.kt
+      - 新增 app/src/test/java/com/bychat/app/network/V2ClientSessionRateLimitTest.kt
+    must_not_touch:
+      - 服务器全局连接限制，留到手机服务器v2实现
+      - 消息业务频率规则，属于P04
+    boundary:
+      - 本限制按输入帧，不按消息文本内容
+      - 心跳也计入但默认频率远低于限制
+    expected_result:
+      - 合法突发可通过，持续超速被稳定拒绝且内存不增长
+    minimal_self_check:
+      - ManualClock测试容量、补充、超速和时间倒退
+      - 测试不使用真实等待
+
+  - id: I02-S19
+    backlog:
+      - P01-E04-T05
+    title: 建立协议模糊输入与异常断开测试
+    objective: 系统验证读取边界、解析失败与关闭幂等
+    what_to_do:
+      - 新建MalformedInputTest
+      - 覆盖负长度、零长度、1MB加1、长度头截断、payload截断、非法UTF-8、空JSON、数组JSON、缺字段、错误字段类型、未知type和不支持版本
+      - 新建AbruptDisconnectTest
+      - 覆盖握手前断开、握手中断开、认证中断开、Ready中断开、写入时断开和close竞争
+      - 每个用例断言CloseReason或ErrorCode以及onClosed恰好一次
+      - 对随机字节执行固定种子1000轮，要求只返回、ProtocolException或IOException，不允许OutOfMemoryError、StackOverflowError和无限阻塞
+      - 给每个网络测试设置JUnit超时上限
+    technology:
+      - JUnit4
+      - 固定种子Random
+      - 内存流与本地回环Socket
+    touch:
+      - 新增 app/src/test/java/com/bychat/app/network/MalformedInputTest.kt
+      - 新增 app/src/test/java/com/bychat/app/network/AbruptDisconnectTest.kt
+    must_not_touch:
+      - 生产代码；若测试发现缺陷，回到责任步骤单独修复并重新运行全套测试
+    boundary:
+      - 禁止连接公网
+      - 模糊测试固定种子保证可复现
+      - 不捕获Throwable后无条件通过
+    expected_result:
+      - 恶意输入和异常断开均受控结束
+      - 生命周期回调无重复
+    minimal_self_check:
+      - grep -c '@Test'两个文件合计不少于18
+      - ./gradlew testDebugUnitTest --tests '*MalformedInputTest' --tests '*AbruptDisconnectTest'通过
+
+  - id: I02-S20
+    backlog:
+      - P01-E03-T01
+      - P01-E03-T02
+      - P01-E03-T03
+      - P01-E03-T04
+      - P01-E03-T05
+      - P01-E03-T06
+      - P01-E04-T04
+      - P01-E04-T05
+    title: I02集成验收与文档同步
+    objective: 证明新网络层完整、可测试且未破坏旧应用
+    what_to_do:
+      - 新建docs/network-session-v2.md记录帧格式、状态图、超时、心跳、重连、恢复和限制
+      - 更新BACKLOG中I02涵盖任务状态为done，仅在全部测试通过后修改
+      - 在I02步骤文档加入completion区，记录完成提交和验证命令
+      - 运行全部本地单元测试
+      - 运行assembleDebug
+      - 检查APK生成
+      - 检查global_must_not_touch文件相对I02起始提交无修改
+      - 检查network生产包无android import
+      - 检查无占位和无敏感日志
+      - 提交并推送触发GitHub Actions
+    technology:
+      - Gradle
+      - Git边界审计
+      - GitHub Actions
+    touch:
+      - 新增 docs/network-session-v2.md
+      - 修改 BACKLOG.yaml中I02对应的8个任务状态
+      - 修改 steps/I02-reliable-network-session.yaml的completion区
+    must_not_touch:
+      - global_must_not_touch全部条目
+    boundary:
+      - 本步骤不新增功能
+      - 任一测试失败不得标记done
+      - GitHub Actions未成功不得宣告I02完成
+    expected_result:
+      - protocol-v2可靠客户端会话层完整存在但尚未替换旧聊天链路
+      - Debug APK与全部单元测试通过
+      - 后续I03可直接实现AuthProvider与安全持久ResumeStore
+    minimal_self_check:
+      - ./gradlew testDebugUnitTest assembleDebug --no-daemon
+      - test -f app/build/outputs/apk/debug/app-debug.apk
+      - grep -R '^import android' app/src/main/java/com/bychat/app/network无输出
+      - grep -R -nE 'TODO|FIXME|NotImplementedError' app/src/main/java app/src/test无输出
+      - git diff --check无输出
+
+execution_batches:
+  - id: I02-B01
+    name: 契约与帧层
+    steps:
+      - I02-S01
+      - I02-S02
+      - I02-S03
+      - I02-S04
+      - I02-S05
+    gate:
+      - Endpoint、FrameReader、FrameWriter和ProtocolTransport测试全部通过
+  - id: I02-B02
+    name: 状态与首次会话
+    steps:
+      - I02-S06
+      - I02-S07
+      - I02-S08
+      - I02-S09
+      - I02-S10
+    gate:
+      - 合法握手进入Ready
+      - 错序和认证拒绝受控关闭
+      - 发送队列有界
+  - id: I02-B03
+    name: 超时心跳与重连
+    steps:
+      - I02-S11
+      - I02-S12
+      - I02-S13
+      - I02-S14
+      - I02-S15
+    gate:
+      - 所有时间测试由ManualScheduler完成且无Thread.sleep
+      - 用户关闭后无活动任务和Socket
+  - id: I02-B04
+    name: 恢复、防护与验收
+    steps:
+      - I02-S16
+      - I02-S17
+      - I02-S18
+      - I02-S19
+      - I02-S20
+    gate:
+      - 会话恢复与回退路径全部通过
+      - 恶意输入受控
+      - 全测试和APK构建通过
+
+verification_commands:
+  fast_structure: grep -R -nE 'TODO|FIXME|NotImplementedError' app/src/main/java/com/bychat/app/network app/src/test/java/com/bychat/app/network
+  fast_boundary: git diff --name-only 14497df..HEAD
+  network_tests: ./gradlew testDebugUnitTest --tests 'com.bychat.app.network.*' --no-daemon
+  protocol_tests: ./gradlew testDebugUnitTest --tests 'com.bychat.app.protocol.*' --no-daemon
+  final: ./gradlew testDebugUnitTest assembleDebug --no-daemon
+  apk: test -f app/build/outputs/apk/debug/app-debug.apk
+  diff: git diff --check
+
+token_efficient_review:
+  - 正常时只输出测试任务结论、失败数和git diff --stat
+  - 编译失败只读取首个error对应文件前后20行
+  - 测试失败只运行失败测试类，不重复输出全日志
+  - 边界检查使用git diff --name-only，不整文件回显
+  - 最终只记录提交号、测试数量、APK路径和Actions链接
+
+completion:
+  status: pending
+  started_from: 14497df
+  finished_at_commit: null
+  local_tests: pending
+  github_actions: pending
+  apk: pending
