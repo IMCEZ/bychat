@@ -18,6 +18,8 @@ object PacketType {
     const val AUTH_REQUEST = "auth_request"
     const val AUTH_RESULT = "auth_result"
     const val READY = "ready"
+    const val RESUME_REQUEST = "resume_request"
+    const val RESUME_RESULT = "resume_result"
     const val MESSAGE_SEND = "message_send"
     const val MESSAGE_EVENT = "message_event"
     const val SYNC_REQUEST = "sync_request"
@@ -31,7 +33,7 @@ object PacketType {
 
     val all: Set<String> = setOf(
         HELLO, HELLO_ACK, AUTH_CHALLENGE, AUTH_REQUEST, AUTH_RESULT, READY,
-        MESSAGE_SEND, MESSAGE_EVENT, SYNC_REQUEST, SYNC_BATCH, MEMBER_EVENT,
+        RESUME_REQUEST, RESUME_RESULT, MESSAGE_SEND, MESSAGE_EVENT, SYNC_REQUEST, SYNC_BATCH, MEMBER_EVENT,
         ADMIN_COMMAND, ADMIN_RESULT, PING, PONG, ERROR
     )
 }

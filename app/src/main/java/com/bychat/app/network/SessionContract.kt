@@ -30,6 +30,8 @@ data class ConnectionRequest(
     val endpoint: Endpoint,
     val clientVersion: String,
     val communityId: String,
+    val authProvider: AuthProvider,
+    val resumeStore: SessionResumeStore,
     val capabilities: Set<ServerCapability> = emptySet()
 ) {
     init {

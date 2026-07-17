@@ -3,7 +3,8 @@ package com.bychat.app.protocol
 data class HelloPayload(
     val clientVersion: String,
     val supportedProtocol: List<Int>,
-    val capabilities: List<String> = emptyList()
+    val capabilities: List<String> = emptyList(),
+    val resumeSupported: Boolean = true
 )
 
 data class HelloAckPayload(
@@ -39,6 +40,24 @@ data class ReadyPayload(
     val ownerId: String,
     val syncCursor: Long
 )
+
+data class ResumeRequestPayload(
+    val sessionToken: String,
+    val communityId: String,
+    val lastSyncCursor: Long
+) {
+    override fun toString(): String = "ResumeRequestPayload(sessionToken=***, communityId=$communityId, lastSyncCursor=$lastSyncCursor)"
+}
+
+data class ResumeResultPayload(
+    val resumed: Boolean,
+    val sessionId: String?,
+    val syncFromCursor: Long?,
+    val token: String?,
+    val expiresAt: Long?
+) {
+    override fun toString(): String = "ResumeResultPayload(resumed=$resumed, sessionId=$sessionId, syncFromCursor=$syncFromCursor, token=***, expiresAt=$expiresAt)"
+}
 
 data class MessageSendPayload(
     val channel: String,
