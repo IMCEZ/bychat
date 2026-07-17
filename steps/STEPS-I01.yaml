@@ -1,0 +1,274 @@
+iteration: I01
+name: protocol-v2骨架
+source: BACKLOG.yaml
+goal: 在不改变现有可运行行为的前提下，先把源码分层、建立结果与错误与日志基础设施，再定义protocol-v2的纯数据模型和规范文档，为I02网络会话层做准备
+current_baseline:
+  package: com.bychat.app
+  flat_files:
+    - MainActivity.kt
+    - BychatApp.kt
+    - ChatClient.kt
+    - ChatServer.kt
+    - HostService.kt
+    - LocalDb.kt
+    - AudioController.kt
+    - Security.kt
+    - Models.kt
+  note: 现有Models.kt中的Message和Packet属于protocol-v1，本迭代不删除，只新增protocol-v2模型并行存在
+
+global_rules:
+  do_not_touch_in_I01:
+    - 不修改现有网络收发逻辑的运行行为
+    - 不修改数据库表结构
+    - 不删除protocol-v1的Message和Packet
+    - 不接线protocol-v2到实际Socket收发，本迭代只建模型不通信
+  keep_green:
+    - 每步完成后assembleDebug必须仍能通过
+    - 现有登录、建服务器、聊天、录音功能保持可用
+  language: 所有用户可见文本和文档使用中文
+  verify_style: 自检优先用编译和小范围grep，避免长输出
+
+steps:
+
+  - id: S01
+    task: P01-E01-T01
+    title: 建立分层包目录并迁移现有文件
+    do:
+      - 在com.bychat.app下创建子包 domain、data、network、server、service、ui、core
+      - 将MainActivity移动到ui包
+      - 将ChatClient移动到network包
+      - 将ChatServer移动到server包
+      - 将HostService移动到service包
+      - 将LocalDb移动到data包
+      - 将AudioController移动到service包
+      - 将Security移动到core包
+      - 将Models移动到network包并保持类名不变
+      - BychatApp保留在根包com.bychat.app
+    tech:
+      - Kotlin包声明与import调整
+      - 保持AndroidManifest中activity和service的全限定名同步更新
+    touch:
+      - app/src/main/java/com/bychat/app/**（仅移动和改package与import）
+      - app/src/main/AndroidManifest.xml（更新.ui.MainActivity和.service.HostService路径）
+    do_not_touch:
+      - 任何方法体内部逻辑
+      - build.gradle依赖
+      - 资源文件res/**
+    boundary: 只做物理位置和package语句迁移，不改任何行为
+    done_effect: 源码按domain/data/network/server/service/ui/core分层，应用可正常构建与启动
+    self_check:
+      - grep '^package com.bychat.app' -r app/src/main/java 确认每个文件在正确子包
+      - 确认AndroidManifest中android:name为.ui.MainActivity与.service.HostService
+      - assembleDebug通过
+
+  - id: S02
+    task: P01-E01-T04
+    title: 建立统一Result结果类型
+    do:
+      - 在core包新建Outcome密封类，包含Success(value)与Failure(error)
+      - 提供map、flatMap、getOrNull、fold等最小扩展
+    tech:
+      - Kotlin sealed class与泛型
+    touch:
+      - app/src/main/java/com/bychat/app/core/Outcome.kt（新增）
+    do_not_touch:
+      - 现有类，本步不接入调用方
+    boundary: 仅新增类型，不改造现有代码使用
+    done_effect: 全项目具备统一的成功失败返回类型，供后续步骤使用
+    self_check:
+      - assembleDebug通过
+      - grep 'sealed' app/src/main/java/com/bychat/app/core/Outcome.kt 确认存在
+
+  - id: S03
+    task: P01-E01-T04
+    title: 建立统一错误类型BychatError
+    do:
+      - 在core包新建BychatError密封类
+      - 分类为NetworkError、ProtocolError、AuthError、ServerError、StorageError、ValidationError、UnknownError
+      - 每个错误含code字符串、retryable布尔、userMessage中文提示、可空cause
+    tech:
+      - Kotlin sealed class
+    touch:
+      - app/src/main/java/com/bychat/app/core/BychatError.kt（新增）
+    do_not_touch:
+      - 现有异常处理逻辑，本步不替换
+    boundary: 仅定义错误模型，不改造现有try-catch
+    done_effect: 具备可映射为用户中文提示且带可重试标识的统一错误类型
+    self_check:
+      - assembleDebug通过
+      - grep 'userMessage' app/src/main/java/com/bychat/app/core/BychatError.kt 确认字段存在
+
+  - id: S04
+    task: P01-E01-T04
+    title: 建立日志接口Logger
+    do:
+      - 在core包新建Logger接口，含d、i、w、e方法，tag与message与可空throwable
+      - 新增AndroidLogger默认实现，Release下降级为不打印或仅错误
+      - 在BychatApp初始化全局Logger单例入口
+    tech:
+      - Kotlin接口与android.util.Log
+      - BuildConfig.DEBUG判断
+    touch:
+      - app/src/main/java/com/bychat/app/core/Logger.kt（新增）
+      - app/src/main/java/com/bychat/app/BychatApp.kt（仅新增Logger初始化行）
+    do_not_touch:
+      - 现有功能代码的日志改写，本步不替换现有print或Log调用
+    boundary: 仅提供日志设施与初始化，不批量替换调用点
+    done_effect: 提供可在Release抑制敏感日志的统一日志入口
+    self_check:
+      - assembleDebug通过
+      - 确认BychatApp中出现Logger初始化且不影响db初始化顺序
+
+  - id: S05
+    task: P01-E01-T02
+    title: 提取客户端会话接口ChatSession
+    do:
+      - 在network包新建ChatSession接口，声明connect、send、close与状态回调抽象
+      - 定义SessionListener回调接口，含onEvent、onStateChanged、onClosed
+      - 让现有ChatClient实现或适配ChatSession接口，保持原有行为不变
+      - MainActivity改为依赖ChatSession类型而非ChatClient具体类
+    tech:
+      - Kotlin接口抽象
+      - 保持现有ChatClient内部实现不动，仅补接口
+    touch:
+      - app/src/main/java/com/bychat/app/network/ChatSession.kt（新增）
+      - app/src/main/java/com/bychat/app/network/ChatClient.kt（仅添加接口实现声明，不改逻辑）
+      - app/src/main/java/com/bychat/app/ui/MainActivity.kt（字段类型由ChatClient改为ChatSession）
+    do_not_touch:
+      - ChatClient内部Socket读写与线程逻辑
+      - ChatServer与协议内容
+    boundary: 只解耦Activity对具体类的依赖，不改通信行为
+    done_effect: Activity面向接口编程，后续可替换网络实现而不改UI
+    self_check:
+      - grep 'ChatClient' app/src/main/java/com/bychat/app/ui/MainActivity.kt 应仅剩构造处
+      - assembleDebug通过
+      - 手动确认登录到聊天路径逻辑未改动
+
+  - id: S06
+    task: P01-E02-T01
+    title: 定义protocol-v2版本与能力字段
+    do:
+      - 在network包新建protocol子包
+      - 新建ProtocolConstants，定义PROTOCOL_VERSION为2和最小兼容版本
+      - 新建ServerCapabilities数据类，含支持的媒体、多社区、TLS、最大帧长等布尔与数值字段
+      - 新建ClientInfo数据类，含appVersion、protocolVersion、平台标识
+    tech:
+      - Kotlin data class纯模型
+    touch:
+      - app/src/main/java/com/bychat/app/network/protocol/ProtocolConstants.kt（新增）
+      - app/src/main/java/com/bychat/app/network/protocol/ServerCapabilities.kt（新增）
+      - app/src/main/java/com/bychat/app/network/protocol/ClientInfo.kt（新增）
+    do_not_touch:
+      - protocol-v1的Models.kt
+      - 现有网络收发
+    boundary: 只定义版本与能力模型，不参与序列化接线
+    done_effect: 具备可用于握手协商的版本与能力数据结构
+    self_check:
+      - assembleDebug通过
+      - grep 'PROTOCOL_VERSION' app/src/main/java/com/bychat/app/network/protocol/ProtocolConstants.kt
+
+  - id: S07
+    task: P01-E02-T02
+    title: 定义ID与时间基础字段
+    do:
+      - 新建protocol包内Envelope基础字段规范，含requestId、responseId、eventId、sentAtEpochMillis
+      - 新建IdGen工具，客户端requestId使用UUID字符串
+      - 约定时间统一为UTC毫秒时间戳Long
+    tech:
+      - Kotlin与java.util.UUID
+    touch:
+      - app/src/main/java/com/bychat/app/network/protocol/Envelope.kt（新增，先做字段定义草案）
+      - app/src/main/java/com/bychat/app/network/protocol/IdGen.kt（新增）
+    do_not_touch:
+      - 现有Packet结构
+    boundary: 仅确定ID与时间约定，不实现网络匹配逻辑
+    done_effect: 请求响应事件具备统一标识与时间语义
+    self_check:
+      - assembleDebug通过
+      - grep 'requestId' app/src/main/java/com/bychat/app/network/protocol/Envelope.kt
+
+  - id: S08
+    task: P01-E02-T03
+    title: 定义protocol-v2数据包模型
+    do:
+      - 在protocol包新建V2Packet类型体系
+      - 握手类 HelloRequest、HelloResponse
+      - 认证类 AuthChallenge、AuthRequest、AuthResult
+      - 消息类 SendMessage、MessageEvent
+      - 同步类 SyncRequest、SyncBatch、SyncCursor
+      - 成员类 MemberEvent、MemberList
+      - 管理类 AdminCommand、AdminResult
+      - 使用统一封装Envelope包裹type与payload
+    tech:
+      - Kotlin sealed class或带type字段的data class集合
+      - Gson友好结构，字段全部可空安全或有默认值
+    touch:
+      - app/src/main/java/com/bychat/app/network/protocol/V2Packets.kt（新增）
+    do_not_touch:
+      - protocol-v1的Models.kt
+      - 服务器与客户端收发逻辑，本步不接线
+    boundary: 只建模型，不实现编解码器，不接入Socket
+    done_effect: 具备完整可序列化的protocol-v2消息族，供I02接线
+    self_check:
+      - assembleDebug通过
+      - grep -c 'class' app/src/main/java/com/bychat/app/network/protocol/V2Packets.kt 确认关键类齐全
+
+  - id: S09
+    task: P01-E02-T04
+    title: 定义稳定错误码表
+    do:
+      - 新建ProtocolErrorCode，集中定义字符串错误码常量
+      - 覆盖版本不兼容、认证失败、令牌过期、权限不足、限流、载荷过大、格式错误、服务器内部错误
+      - 每个错误码映射默认可重试标识与中文提示，复用S03的BychatError
+    tech:
+      - Kotlin常量与映射表
+    touch:
+      - app/src/main/java/com/bychat/app/network/protocol/ProtocolErrorCode.kt（新增）
+    do_not_touch:
+      - 现有错误字符串直接抛出的旧逻辑
+    boundary: 只定义错误码与映射，不改造现有抛错点
+    done_effect: 协议层错误码稳定且可映射为用户中文提示与重试决策
+    self_check:
+      - assembleDebug通过
+      - grep 'VERSION_INCOMPATIBLE' app/src/main/java/com/bychat/app/network/protocol/ProtocolErrorCode.kt
+
+  - id: S10
+    task: P01-E02-T05
+    title: 编写protocol-v2中文规范与示例
+    do:
+      - 新建docs/protocol-v2.md
+      - 写明版本协商、帧格式约定预告、Envelope结构、各数据包字段表
+      - 写明错误码表、可重试语义、时间与ID约定
+      - 为每类数据包附JSON示例
+      - 声明与protocol-v1的差异和并存策略
+    tech:
+      - Markdown文档
+    touch:
+      - docs/protocol-v2.md（新增）
+      - 协议.md（在文首加入一行指向docs/protocol-v2.md的说明）
+    do_not_touch:
+      - 代码文件
+    boundary: 文档需与S06到S09的模型字段完全一致
+    done_effect: 形成可据以实现I02编解码与服务端的一致规范
+    self_check:
+      - grep '## 错误码' docs/protocol-v2.md 确认章节存在
+      - 抽查文档中的字段名与V2Packets.kt一致
+
+completion_of_I01:
+  acceptance:
+    - 源码完成分层且构建通过
+    - Outcome、BychatError、Logger基础设施就位
+    - 客户端UI依赖ChatSession接口
+    - protocol-v2模型与错误码定义完整且可序列化
+    - protocol-v2规范文档与模型一致
+  explicitly_not_done:
+    - protocol-v2尚未接入真实Socket收发
+    - 帧协议、握手流程、重连在I02实现
+  next_iteration: I02
+
+verification_recipe:
+  cheap_build: gradle assembleDebug --no-daemon
+  structural_grep:
+    - grep -rL '^package com.bychat.app' app/src/main/java 应为空
+    - grep -R 'network/protocol' -l app/src/main/java | wc -l
+  ci: 每个步骤commit后由GitHub Actions构建校验，绿色即通过
