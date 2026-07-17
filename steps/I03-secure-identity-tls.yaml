@@ -1,0 +1,983 @@
+iteration: I03
+name: 安全身份登录与TLS信任
+source_backlog: BACKLOG.yaml
+planning_basis:
+  repository_head_when_planned: d38627d
+  current_runtime_chain: legacy_json_lines
+  target_runtime_chain: protocol_v2_length_prefixed_tls
+prerequisite:
+  required:
+    - I01已完成且ProtocolCodec测试通过
+    - I02的20个步骤全部完成，不只是I02-B01
+    - V2ClientSession、SocketConnector、SessionResumeStore和AuthProvider的最终接口已落地
+    - GitHub Actions的testDebugUnitTest与assembleDebug成功
+  block_rule: I02未完成前允许提交本计划，禁止执行I03生产代码接线
+
+goal: 用Android Keystore、加密本地身份、Ed25519挑战签名、TLS服务器证书指纹信任和安全会话令牌替代旧credential跨网认证；保持旧链路可回退，直到v2客户端与v2手机主机同时可用
+
+security_choices:
+  identity_signature: Ed25519
+  identity_library: Google Tink Android
+  local_data_cipher: AES-256-GCM
+  password_kdf: PBKDF2WithHmacSHA256
+  password_kdf_iterations: 310000
+  password_salt_bytes: 16
+  account_master_key_bytes: 32
+  challenge_nonce_bytes: 32
+  challenge_ttl_ms: 60000
+  session_token_bytes: 32
+  session_token_ttl_ms: 604800000
+  tls_minimum: TLSv1.2
+  fingerprint: SHA-256 of DER encoded leaf certificate
+  trust_model: 首次使用确认TOFU，后续严格固定指纹
+
+non_negotiable_rules:
+  - 禁止TODO、FIXME、NotImplementedError、空实现、固定假密钥、固定假签名、固定假令牌和跳过证书校验
+  - 禁止TrustManager接受所有证书
+  - 禁止HostnameVerifier无条件返回true
+  - 禁止在日志、异常、通知、Intent、Bundle和剪贴板记录密码、私钥、主密钥、挑战签名或会话令牌
+  - 禁止使用java.util.Random生成任何安全材料
+  - 密码和明文密钥优先使用CharArray或ByteArray，使用后清零
+  - 所有认证比较使用常量时间比较
+  - 所有认证请求必须绑定服务器、社区、挑战、用户和协议版本
+  - 所有挑战必须一次性、短时有效并在成功或失败后消费
+  - 所有令牌必须只以哈希形式存入服务器数据库
+  - 首次TLS指纹必须经用户明确确认，不能自动信任
+  - 指纹变化必须阻断，不允许静默更新
+  - 数据库升级必须有迁移测试，不允许卸载重装作为迁移方案
+  - 旧账号和旧消息不得因升级丢失
+  - 每个步骤结束必须通过对应测试，最终必须通过全部测试与assembleDebug
+
+global_must_not_touch:
+  - 旧消息表内容
+  - 现有用户名与密码登录入口的用户数据
+  - 语音录制与播放逻辑
+  - 消息展示逻辑
+  - 房主管理业务语义
+  - protocol-v2既有错误码数值和wireName
+  - protocol-v2既有PacketType字符串
+  - GitHub仓库历史
+  - 任何已发布APK签名材料
+
+steps:
+  - id: I03-S01
+    backlog:
+      - P02-E01-T01
+    title: 冻结身份与认证数据模型
+    objective: 在改数据库前固定本地账号、服务器身份、挑战和会话的字段与生命周期
+    what_to_do:
+      - 新建docs/security-identity-v1.md
+      - 定义LocalAccount、IdentityKey、ServerTrust、ServerRegistration、AuthChallenge和ServerSession字段表
+      - 定义每个敏感字段是明文、密文、哈希还是不可持久化
+      - 定义账号创建、解锁、注册、登录、注销、密钥失效和指纹变化状态图
+      - 定义旧username加password账号到新身份账号的迁移流程
+      - 定义威胁边界：服务器不可信、网络不可信、本机解锁后应用进程可信
+    technology:
+      - Markdown规范
+      - 数据分类表
+      - 状态机图使用Mermaid文本
+    touch:
+      - 新增 docs/security-identity-v1.md
+    must_not_touch:
+      - 生产代码
+      - 数据库
+    boundary:
+      - 文档必须与后续字段命名一致
+      - 不宣称端到端加密；TLS只保护传输，服务器仍可读取社区消息
+    expected_result:
+      - 身份与认证实现有唯一规范来源
+      - 明确所有敏感数据的存储和擦除规则
+    minimal_self_check:
+      - grep确认六类模型名称全部存在
+      - grep确认包含“不提供端到端加密”说明
+      - git diff --check无输出
+
+  - id: I03-S02
+    backlog:
+      - P02-E01-T03
+      - P02-E01-T04
+    title: 添加并锁定密码学依赖
+    objective: 为Android 10以上提供一致Ed25519实现，不依赖设备厂商Provider差异
+    what_to_do:
+      - 在app/build.gradle添加Google Tink Android稳定固定版本
+      - 不使用动态版本、SNAPSHOT或未固定Git提交
+      - 添加dependency verification或至少记录依赖版本与用途到security文档
+      - 启用R8所需规则并验证Release编译不删除Tink关键实现
+      - 新增CryptoProviderSmokeTest验证Ed25519生成、签名和验证
+    technology:
+      - com.google.crypto.tink:tink-android
+      - JUnit4
+      - Gradle固定版本
+    touch:
+      - 修改 app/build.gradle
+      - 修改 app/proguard-rules.pro
+      - 新增 app/src/test/java/com/bychat/app/security/CryptoProviderSmokeTest.kt
+      - 修改 docs/security-identity-v1.md
+    must_not_touch:
+      - compileSdk、minSdk和targetSdk
+      - 其他依赖版本
+    boundary:
+      - 只引入一个密码学依赖
+      - 不将测试密钥写入生产源码
+    expected_result:
+      - JVM测试可生成Ed25519密钥并验证签名
+      - Android Release构建保留所需实现
+    minimal_self_check:
+      - grep依赖只有固定版本且无加号
+      - ./gradlew testDebugUnitTest --tests '*CryptoProviderSmokeTest' assembleRelease通过
+
+  - id: I03-S03
+    backlog:
+      - P02-E01-T04
+    title: 实现密码派生与敏感字节工具
+    objective: 统一密码派生、随机数、常量时间比较和内存擦除
+    what_to_do:
+      - 新建SecureBytes，使用SecureRandom生成指定长度字节
+      - 新建PasswordKdf，使用PBKDF2WithHmacSHA256、310000次、256位输出
+      - 参数对象强制salt至少16字节、迭代不少于210000、输出至少256位
+      - 实现MessageDigest.isEqual常量时间比较包装
+      - 实现CharArray与ByteArray安全清零函数
+      - 所有失败路径在finally清理临时密码与派生密钥
+    technology:
+      - SecureRandom
+      - SecretKeyFactory
+      - PBEKeySpec
+      - MessageDigest.isEqual
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/security/SecureBytes.kt
+      - 新增 app/src/main/java/com/bychat/app/security/PasswordKdf.kt
+      - 新增 app/src/test/java/com/bychat/app/security/PasswordKdfTest.kt
+    must_not_touch:
+      - 旧Security.kt，本步并行实现后续迁移
+    boundary:
+      - PasswordKdf不访问数据库或Android Keystore
+      - 不返回String形式的明文密钥
+    expected_result:
+      - 相同参数产生相同派生值，不同salt产生不同值
+      - 无效参数被拒绝且输入密码被清理
+    minimal_self_check:
+      - 测试覆盖确定性、不同salt、参数下限、比较与清零
+      - grep -R 'java.util.Random' security生产目录无输出
+
+  - id: I03-S04
+    backlog:
+      - P02-E01-T03
+    title: 实现Android Keystore主密钥
+    objective: 用设备硬件或系统Keystore保护应用级包装密钥
+    what_to_do:
+      - 定义MasterKeyStore接口：createIfAbsent、encrypt、decrypt、delete
+      - 实现AndroidMasterKeyStore，别名含应用ID和版本但不含用户名
+      - 使用AES-256-GCM、NoPadding、随机12字节IV和AAD
+      - KeyGenParameterSpec限制PURPOSE_ENCRYPT与DECRYPT、GCM、无用户认证要求
+      - 密文格式带版本、IV、ciphertext和tag，不依赖Java对象序列化
+      - 区分KeyPermanentlyInvalidatedException、AEADBadTagException和普通存储错误
+      - 测试使用内存FakeMasterKeyStore，Android实现使用instrumentation测试
+    technology:
+      - AndroidKeyStore
+      - AES/GCM/NoPadding
+      - KeyGenParameterSpec
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/security/MasterKeyStore.kt
+      - 新增 app/src/main/java/com/bychat/app/security/AndroidMasterKeyStore.kt
+      - 新增 app/src/androidTest/java/com/bychat/app/security/AndroidMasterKeyStoreTest.kt
+      - 新增 app/src/test/java/com/bychat/app/security/FakeMasterKeyStore.kt
+    must_not_touch:
+      - Manifest权限
+      - 生物识别，本迭代不要求每次系统认证
+    boundary:
+      - Keystore密钥不可导出
+      - 解密失败不得自动删除数据
+      - 不使用固定IV
+    expected_result:
+      - 应用可安全包装和解包本地主密钥
+      - 篡改密文必然解密失败
+    minimal_self_check:
+      - grep确认AES/GCM/NoPadding和随机IV
+      - grep确认不存在ECB和固定全零IV
+      - connectedAndroidTest在可用设备执行，CI至少assembleAndroidTest通过
+
+  - id: I03-S05
+    backlog:
+      - P02-E01-T04
+    title: 定义版本化加密信封
+    objective: 为账号主密钥和私钥密文提供可迁移、可校验格式
+    what_to_do:
+      - 定义EncryptedBlob字段version、algorithm、iv、ciphertext和aadVersion
+      - 实现AES-GCM加解密器，AAD绑定用途、账号ID和记录版本
+      - Base64仅用于数据库文本字段编码，不把编码误当加密
+      - 解密前校验版本、算法、IV长度和最大密文长度
+      - 不支持版本返回明确UNSUPPORTED_PROTOCOL或专用本地错误，不尝试猜测
+    technology:
+      - AES-256-GCM
+      - Gson或明确分隔的版本格式
+      - Base64 NO_WRAP
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/security/EncryptedBlob.kt
+      - 新增 app/src/main/java/com/bychat/app/security/LocalCipher.kt
+      - 新增 app/src/test/java/com/bychat/app/security/LocalCipherTest.kt
+    must_not_touch:
+      - 网络协议Envelope
+    boundary:
+      - 加密信封只用于本地敏感数据
+      - AAD不含密码和私钥
+    expected_result:
+      - 私密数据可加密、解密并检测任意篡改
+      - 格式可在未来升级
+    minimal_self_check:
+      - 测试覆盖往返、错AAD、错密钥、篡改、未知版本和超限
+      - ./gradlew testDebugUnitTest --tests '*LocalCipherTest'通过
+
+  - id: I03-S06
+    backlog:
+      - P02-E01-T01
+    title: 设计数据库v2身份表与迁移脚本
+    objective: 增加多账号和服务器身份数据，同时保留旧account表与消息
+    what_to_do:
+      - 数据库版本从1升到2
+      - 新建local_account表，保存account_id、username、password_salt、password_verifier、wrapped_master_key、created_at和updated_at
+      - 新建identity_key表，保存account_id、public_key、encrypted_private_key、key_version和created_at
+      - 新建server_trust表，保存account_id、endpoint_key、leaf_fingerprint、first_seen_at、last_seen_at和confirmed_at
+      - 新建server_registration表，保存account_id、endpoint_key、community_id、server_user_id和public_key
+      - 新建server_session表，保存account_id、endpoint_key、community_id、token_hash或客户端加密token、expires_at和sync_cursor；客户端令牌必须加密存储
+      - 添加外键、唯一约束和查询索引
+      - onUpgrade仅处理1到2迁移，未知降级拒绝启动
+    technology:
+      - SQLiteOpenHelper事务迁移
+      - 外键与索引
+    touch:
+      - 修改 app/src/main/java/com/bychat/app/LocalDb.kt
+      - 新增 app/src/main/java/com/bychat/app/data/IdentitySchema.kt
+      - 新增 app/src/test/java/com/bychat/app/data/IdentityMigrationTest.kt
+    must_not_touch:
+      - 旧account表定义
+      - message表内容与字段
+      - remote_user表内容与字段
+    boundary:
+      - 本步骤只建表和迁移，不迁移旧密码账号内容
+      - 所有建表与版本升级在单一事务内
+    expected_result:
+      - v1数据库升级后旧三张表数据完整
+      - 新身份表具备约束和索引
+    minimal_self_check:
+      - 测试创建v1样本后升级并逐表核对行数与内容
+      - grep确认DATABASE_VERSION为2且无DROP TABLE
+
+  - id: I03-S07
+    backlog:
+      - P02-E01-T01
+      - P02-E01-T04
+    title: 实现身份数据库仓库
+    objective: 用参数化SQL安全读写加密身份记录
+    what_to_do:
+      - 定义IdentityRepository接口
+      - 实现SqliteIdentityRepository的创建账号、读取账号、保存密钥、读取密钥、保存信任、读取信任、保存会话、清除会话
+      - 所有多表写入使用事务
+      - 所有查询使用selectionArgs或绑定参数
+      - 不向上层返回Cursor
+      - 会话token进入仓库前必须已加密
+      - 冲突区分用户名重复、服务器注册重复和普通数据库错误
+    technology:
+      - SQLiteDatabase
+      - ContentValues
+      - Outcome
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/data/IdentityRepository.kt
+      - 新增 app/src/main/java/com/bychat/app/data/SqliteIdentityRepository.kt
+      - 新增 app/src/test/java/com/bychat/app/data/SqliteIdentityRepositoryTest.kt
+    must_not_touch:
+      - MainActivity
+      - 网络层
+    boundary:
+      - 仓库不处理密码派生和加解密
+      - 仓库日志不得输出字段值
+    expected_result:
+      - 身份相关记录可事务化保存和读取
+      - 敏感字段不会以明文进入数据库
+    minimal_self_check:
+      - 测试覆盖增删改查、唯一冲突、事务回滚和会话清除
+      - grep SQL拼接用户输入模式无命中
+
+  - id: I03-S08
+    backlog:
+      - P02-E02-T01
+      - P02-E02-T02
+    title: 实现Ed25519身份密钥生成与用户ID
+    objective: 为每个本地账号生成长期去中心化身份
+    what_to_do:
+      - 定义IdentitySigner接口：publicKey、userId、sign
+      - 使用Tink生成Ed25519私钥
+      - 导出标准化原始32字节公钥或明确版本化公钥格式
+      - userId定义为bcu1_加SHA-256公钥摘要的Base32无填充编码
+      - 私钥序列化后立即使用账号主密钥加密再持久化
+      - 加载时只在内存中短期解密，使用后清理可清理字节
+      - 实现verify供服务器验证签名
+    technology:
+      - Tink PublicKeySign和PublicKeyVerify
+      - SHA-256
+      - Base32无填充编码
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/identity/IdentitySigner.kt
+      - 新增 app/src/main/java/com/bychat/app/identity/Ed25519Identity.kt
+      - 新增 app/src/main/java/com/bychat/app/identity/UserId.kt
+      - 新增 app/src/test/java/com/bychat/app/identity/Ed25519IdentityTest.kt
+    must_not_touch:
+      - 旧Security.kt
+      - 用户名格式
+    boundary:
+      - 用户ID由公钥确定，与昵称和服务器无关
+      - 私钥禁止导出到UI或日志
+    expected_result:
+      - 同一公钥始终产生同一userId
+      - 签名只能由对应公钥验证
+    minimal_self_check:
+      - 测试覆盖稳定ID、不同密钥不同ID、签名、篡改和错误公钥
+      - grep生产源码无私钥Base64日志
+
+  - id: I03-S09
+    backlog:
+      - P02-E01-T04
+    title: 实现账号创建与安全解锁服务
+    objective: 串联密码、Keystore、账号主密钥和身份私钥
+    what_to_do:
+      - 创建账号时生成passwordSalt和随机accountMasterKey
+      - 用PasswordKdf生成passwordVerifier与passwordWrappingKey，二者必须域分离
+      - 用passwordWrappingKey加密accountMasterKey，再由AndroidMasterKeyStore包装整个密码信封
+      - 生成Ed25519身份并用accountMasterKey加密私钥
+      - 在一个数据库事务内保存账号和身份记录
+      - 解锁时先验证密码，再依次解开Keystore层和密码层
+      - 任何失败清理密码、派生密钥和主密钥
+      - 返回短生命周期UnlockedIdentity，不返回裸私钥
+    technology:
+      - PasswordKdf
+      - MasterKeyStore
+      - LocalCipher
+      - IdentityRepository
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/identity/AccountIdentityService.kt
+      - 新增 app/src/main/java/com/bychat/app/identity/UnlockedIdentity.kt
+      - 新增 app/src/test/java/com/bychat/app/identity/AccountIdentityServiceTest.kt
+    must_not_touch:
+      - MainActivity登录流程，本步不接UI
+      - 旧account表
+    boundary:
+      - 用户名仍为公开数据
+      - UnlockedIdentity关闭后必须不可继续签名
+      - 密码错误与密文损坏对UI使用统一提示，详细原因只留非敏感错误码
+    expected_result:
+      - 新账号创建后具备加密长期身份
+      - 正确密码可解锁，错误密码、篡改或缺失Keystore密钥均失败
+    minimal_self_check:
+      - 测试覆盖成功、错密码、篡改、事务失败回滚和close后拒绝签名
+      - 测试断言数据库不含密码和私钥明文片段
+
+  - id: I03-S10
+    backlog:
+      - P02-E01-T01
+      - P02-E02-T05
+    title: 迁移旧本地账号为新身份账号
+    objective: 用户首次使用新版本登录时无损升级身份
+    what_to_do:
+      - 旧账号使用原密码验证成功后触发惰性迁移
+      - 调用AccountIdentityService创建同用户名的新local_account与identity_key
+      - 迁移成功后保留旧account行一个兼容版本周期，不立即删除
+      - 记录迁移完成标志，避免每次登录重复生成身份
+      - 新身份创建失败时回滚且旧登录仍可用
+      - 同名新账号已存在时验证归属，不覆盖
+    technology:
+      - SQLite事务
+      - 旧Security.passwordHash只用于一次迁移验证
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/identity/LegacyAccountMigrator.kt
+      - 修改 app/src/main/java/com/bychat/app/LocalDb.kt，增加只读旧账号验证与迁移标记接口
+      - 新增 app/src/test/java/com/bychat/app/identity/LegacyAccountMigratorTest.kt
+    must_not_touch:
+      - 旧消息
+      - remote_user记录
+      - 不删除旧account行
+    boundary:
+      - 禁止将旧passwordHash作为网络credential继续发送
+      - 迁移必须由用户输入正确密码触发
+    expected_result:
+      - 现有用户登录一次后获得新Ed25519身份
+      - 失败迁移不锁死旧账号
+    minimal_self_check:
+      - 测试覆盖首次迁移、重复登录、错密码、写失败回滚和同名冲突
+      - grep迁移代码无DELETE FROM account
+
+  - id: I03-S11
+    backlog:
+      - P02-E02-T03
+    title: 定义挑战签名规范与规范化字节
+    objective: 防止字段歧义、跨服务器重放和跨社区重放
+    what_to_do:
+      - 定义ChallengeContext字段protocolVersion、serverId、communityId、challengeId、nonce、userId、issuedAt和expiresAt
+      - 定义canonicalBytes，使用固定字段顺序、固定UTF-8、长度前缀，不使用字符串拼接JSON作为签名内容
+      - 每个字符串限制长度，nonce固定32字节
+      - 签名域前缀固定BYCHAT-AUTH-V2
+      - 客户端签名与服务器验证使用相同canonicalBytes实现
+    technology:
+      - ByteArrayOutputStream
+      - DataOutputStream大端长度
+      - UTF-8
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/auth/ChallengeContext.kt
+      - 新增 app/src/main/java/com/bychat/app/auth/ChallengeCanonicalizer.kt
+      - 新增 app/src/test/java/com/bychat/app/auth/ChallengeCanonicalizerTest.kt
+    must_not_touch:
+      - ProtocolCodec帧格式
+    boundary:
+      - canonical格式发布后字段顺序不可随意改变
+      - nonce不得以可预测计数器生成
+    expected_result:
+      - 相同上下文产生相同字节，任一字段改变都会使签名输入变化
+    minimal_self_check:
+      - 固定测试向量断言完整十六进制结果
+      - 测试逐字段修改均产生不同结果
+
+  - id: I03-S12
+    backlog:
+      - P02-E02-T03
+    title: 实现客户端签名AuthProvider
+    objective: 让V2ClientSession使用解锁身份完成挑战签名
+    what_to_do:
+      - 实现SignedAuthProvider适配I02 AuthProvider
+      - 校验挑战服务器ID、社区ID、签发时间、过期时间和nonce长度
+      - 使用MonotonicClock与受控服务器时间偏移判断有效期
+      - 对canonicalBytes签名并构造AuthRequestPayload
+      - 签名后清理canonicalBytes和临时签名字节副本
+      - 已关闭或锁定身份返回UNAUTHORIZED
+    technology:
+      - AuthProvider
+      - UnlockedIdentity
+      - ChallengeCanonicalizer
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/auth/SignedAuthProvider.kt
+      - 新增 app/src/test/java/com/bychat/app/auth/SignedAuthProviderTest.kt
+    must_not_touch:
+      - V2ClientSession握手流程，除非I02最终接口要求最小适配
+    boundary:
+      - AuthProvider不读密码和数据库
+      - 不接受过期、未来签发或上下文不匹配挑战
+    expected_result:
+      - 合法挑战产生可验证AuthRequest
+      - 重放或跨上下文挑战被客户端拒绝
+    minimal_self_check:
+      - 测试覆盖正常、过期、未来、错服务器、错社区、错nonce和锁定身份
+      - grep日志无signature、privateKey和sessionToken内容
+
+  - id: I03-S13
+    backlog:
+      - P02-E02-T03
+    title: 实现服务器一次性挑战仓库
+    objective: 手机主机与外部服务器可安全签发并消费挑战
+    what_to_do:
+      - 定义ChallengeStore接口
+      - 实现内存BoundedChallengeStore，最大10000条并按expiresAt清理
+      - issue使用32字节SecureRandom nonce和唯一challengeId
+      - consume原子地读取并删除，第二次消费必须失败
+      - 按连接ID、服务器ID、社区ID和用户ID绑定挑战
+      - 每连接最多一个活动挑战，新挑战替换并销毁旧挑战
+    technology:
+      - ConcurrentHashMap
+      - ReentrantLock或compute原子操作
+      - SecureRandom
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/auth/ChallengeStore.kt
+      - 新增 app/src/main/java/com/bychat/app/auth/BoundedChallengeStore.kt
+      - 新增 app/src/test/java/com/bychat/app/auth/BoundedChallengeStoreTest.kt
+    must_not_touch:
+      - 旧ChatServer认证
+    boundary:
+      - 挑战不写入持久数据库
+      - 达到容量时拒绝新挑战或清理过期项，不无界增长
+    expected_result:
+      - 挑战一次有效、自动过期、受容量限制并绑定连接上下文
+    minimal_self_check:
+      - 测试覆盖一次消费、过期、替换、错绑定、并发消费和容量上限
+      - 并发消费测试断言仅一个成功
+
+  - id: I03-S14
+    backlog:
+      - P02-E02-T03
+    title: 实现服务器签名验证与首次注册
+    objective: 服务器通过公钥验证用户并建立不可冒用的用户ID绑定
+    what_to_do:
+      - 定义ServerIdentityRegistry接口
+      - 首次登录时验证userId由publicKey正确派生
+      - 消费ChallengeStore挑战并重建canonicalBytes
+      - 使用Ed25519公钥验证签名
+      - 验证成功后创建server_registration
+      - 已注册userId必须使用相同公钥；不同公钥返回CONFLICT
+      - 用户名和昵称不参与密码学身份判断
+    technology:
+      - Ed25519 PublicKeyVerify
+      - ChallengeStore
+      - IdentityRepository或服务器身份仓库接口
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/auth/ServerAuthVerifier.kt
+      - 新增 app/src/main/java/com/bychat/app/auth/ServerIdentityRegistry.kt
+      - 新增 app/src/test/java/com/bychat/app/auth/ServerAuthVerifierTest.kt
+    must_not_touch:
+      - remote_user旧credential表
+    boundary:
+      - 首次注册不是自动信任用户名，而是注册公钥身份
+      - 签名失败不得泄露具体校验阶段
+    expected_result:
+      - 合法新用户注册，后续相同身份登录
+      - 冒用userId、篡改签名和替换公钥全部失败
+    minimal_self_check:
+      - 测试覆盖首次注册、重复登录、错签名、错userId、换公钥和挑战重放
+      - 失败统一映射UNAUTHORIZED或CONFLICT
+
+  - id: I03-S15
+    backlog:
+      - P02-E02-T04
+    title: 实现安全会话令牌签发与哈希存储
+    objective: 认证成功后签发可轮换、可撤销且数据库泄露不可直接使用的令牌
+    what_to_do:
+      - 使用SecureRandom生成32字节令牌
+      - 网络表示使用Base64 URL_SAFE NO_WRAP NO_PADDING
+      - 服务器只保存SHA-256令牌哈希、userId、communityId、issuedAt、expiresAt和revokedAt
+      - verify先哈希输入再常量时间比较并校验绑定与过期
+      - rotate事务性创建新令牌并撤销旧令牌
+      - logout立即撤销当前令牌
+      - 每用户每社区限制活动令牌数量，超出撤销最旧
+    technology:
+      - SecureRandom
+      - SHA-256
+      - 常量时间比较
+      - SQLite事务
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/auth/SessionTokenService.kt
+      - 新增 app/src/main/java/com/bychat/app/auth/SessionTokenRepository.kt
+      - 新增 app/src/test/java/com/bychat/app/auth/SessionTokenServiceTest.kt
+      - 修改身份数据库schema加入必要服务器令牌索引，若S06已预留则只实现仓库
+    must_not_touch:
+      - 客户端明文token日志
+      - 旧credential
+    boundary:
+      - 原始令牌只在签发结果和客户端加密存储中短暂存在
+      - 服务端数据库不得保存原始令牌
+    expected_result:
+      - 有效令牌可恢复会话，过期、撤销、跨用户和跨社区令牌失败
+    minimal_self_check:
+      - 测试覆盖签发、验证、过期、撤销、轮换、跨绑定和活动数量上限
+      - 搜索测试数据库确认原始token字符串不存在
+
+  - id: I03-S16
+    backlog:
+      - P02-E02-T04
+      - P02-E02-T05
+    title: 实现客户端加密会话恢复存储
+    objective: 用账号主密钥保护I02会话恢复token与游标
+    what_to_do:
+      - 实现EncryptedSessionResumeStore适配I02 SessionResumeStore
+      - AAD绑定accountId、endpointKey和communityId
+      - 保存前加密sessionToken，游标和过期时间可明文但需与密文AAD绑定
+      - load时校验过期、端点和社区，失败即返回受控错误
+      - clear删除指定端点社区记录
+      - 指纹变化时清除此服务器全部恢复令牌
+    technology:
+      - LocalCipher
+      - IdentityRepository
+      - SessionResumeStore
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/auth/EncryptedSessionResumeStore.kt
+      - 新增 app/src/test/java/com/bychat/app/auth/EncryptedSessionResumeStoreTest.kt
+    must_not_touch:
+      - I02重连算法
+    boundary:
+      - 客户端数据库不能出现原始token
+      - 解密失败不自动信任或继续连接
+    expected_result:
+      - 重启应用后可安全恢复会话
+      - 换账号、换社区、换端点或指纹变化不能复用令牌
+    minimal_self_check:
+      - 测试覆盖保存读取、过期、错AAD、清理和数据库无明文
+
+  - id: I03-S17
+    backlog:
+      - P01-E04-T01
+    title: 实现TLS客户端Socket升级
+    objective: 让V2ClientSession的公网传输运行于TLS而非明文TCP
+    what_to_do:
+      - 定义TlsSocketFactory接口便于测试
+      - 实现DefaultTlsSocketFactory，将已连接Socket包装为SSLSocket
+      - 仅启用设备支持的TLSv1.3和TLSv1.2
+      - 配置SNI为规范化域名；IP地址不伪造域名SNI
+      - 执行startHandshake并应用握手超时
+      - 获取叶子证书DER与SHA-256指纹
+      - 握手失败关闭底层Socket
+    technology:
+      - SSLContext
+      - SSLSocket
+      - SNIHostName
+      - X509Certificate
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/network/TlsSocketFactory.kt
+      - 新增 app/src/main/java/com/bychat/app/network/TlsPeer.kt
+      - 新增 app/src/test/java/com/bychat/app/network/TlsSocketFactoryTest.kt
+    must_not_touch:
+      - cleartext旧ChatClient
+      - network_security_config不能放宽
+    boundary:
+      - 不实现信任所有证书
+      - TLS握手完成前不得发送protocol-v2 HELLO
+      - 自签名证书由下一步TOFU策略判定，不靠系统CA自动绕过
+    expected_result:
+      - v2连接可获得加密Socket和服务器证书指纹
+      - TLS版本过低或握手失败被拒绝
+    minimal_self_check:
+      - 测试使用本地TLS服务器，不访问公网
+      - grep -R 'checkServerTrusted.*return|HostnameVerifier.*true'生产代码无命中
+
+  - id: I03-S18
+    backlog:
+      - P01-E04-T02
+    title: 实现TOFU服务器指纹信任决策
+    objective: 首次连接由用户确认，自此固定服务器证书指纹
+    what_to_do:
+      - 定义ServerTrustDecision：TRUSTED、FIRST_SEEN_REQUIRES_CONFIRMATION、FINGERPRINT_CHANGED
+      - 定义ServerTrustManager，按accountId加规范endpointKey查server_trust
+      - 首次看到返回待确认并包含格式化SHA-256指纹
+      - confirm显式保存fingerprint和confirmedAt
+      - 相同指纹更新lastSeenAt并返回TRUSTED
+      - 不同指纹返回FINGERPRINT_CHANGED且不覆盖旧值
+      - 指纹格式统一为大写十六进制每字节冒号分隔
+    technology:
+      - IdentityRepository
+      - SHA-256指纹
+      - TOFU
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/security/ServerTrustManager.kt
+      - 新增 app/src/main/java/com/bychat/app/security/ServerTrustDecision.kt
+      - 新增 app/src/test/java/com/bychat/app/security/ServerTrustManagerTest.kt
+    must_not_touch:
+      - MainActivity，本步不做确认UI
+    boundary:
+      - 第一次连接不能自动调用confirm
+      - endpointKey必须包含规范host、port和secure标志
+    expected_result:
+      - 首次指纹待确认，相同指纹自动信任，不同指纹严格阻断
+    minimal_self_check:
+      - 测试覆盖首次、确认、重复、变化、不同账号和不同端口
+      - 测试断言变化后数据库仍为旧指纹
+
+  - id: I03-S19
+    backlog:
+      - P01-E04-T02
+      - P01-E04-T03
+    title: 实现服务器指纹确认与变化阻断界面
+    objective: 用户能看清首次信任风险，证书变化时无法误触继续
+    what_to_do:
+      - 新建指纹确认DialogFragment或Activity
+      - 显示服务器地址、社区名、完整指纹和安全说明
+      - 首次连接提供取消与“我已核对，信任此服务器”
+      - 信任按钮需用户勾选确认后启用
+      - 指纹变化使用红色阻断页，显示旧指纹与新指纹
+      - 变化页默认只提供取消和删除服务器；高级重新信任必须经过二次确认并清除会话token
+      - 旋转屏幕和进程重建后不丢待确认信息，但不得用Intent明文携带token
+    technology:
+      - AndroidX Fragment或独立Activity
+      - ViewModel SavedStateHandle仅保存非敏感指纹
+    touch:
+      - 新增 app/src/main/java/com/bychat/app/ui/trust/ServerTrustActivity.kt或等价Fragment
+      - 新增对应layout与strings资源
+      - 修改 app/src/main/AndroidManifest.xml注册非导出Activity，如采用Activity
+      - 新增 app/src/androidTest/java/com/bychat/app/ui/trust/ServerTrustUiTest.kt
+    must_not_touch:
+      - 现有聊天页面布局与行为
+      - 不允许在变化页放一个无二次确认的继续按钮
+    boundary:
+      - UI只收集决定，信任存储由ServerTrustManager执行
+      - 指纹变化不是普通警告，默认必须阻断
+    expected_result:
+      - 用户可明确确认首次服务器身份
+      - 中间人或服务器证书变化不会被静默接受
+    minimal_self_check:
+      - UI测试覆盖首次取消、确认前禁用、确认成功和变化阻断
+      - grep资源无“忽略并继续”单步按钮
+
+  - id: I03-S20
+    backlog:
+      - P01-E04-T01
+      - P01-E04-T02
+      - P01-E04-T03
+    title: 将TLS与指纹信任接入V2ClientSession
+    objective: 在HELLO前完成TLS握手与信任判定
+    what_to_do:
+      - Endpoint.secure为true时，TCP连接后立即调用TlsSocketFactory
+      - 获取TlsPeer后调用ServerTrustManager.evaluate
+      - TRUSTED才进入Handshaking并发送HELLO
+      - FIRST_SEEN时进入新的AwaitingTrust状态并暂停读写，等待UI确认或取消
+      - FINGERPRINT_CHANGED关闭连接并清除该端点恢复会话
+      - 确认后再次核对连接generation和同一TlsPeer再继续
+      - 所有TLS失败映射为PROTOCOL_ERROR或专用安全关闭原因，不自动降级明文
+      - secure端点绝不回退到普通Socket
+    technology:
+      - V2ClientSession
+      - TlsSocketFactory
+      - ServerTrustManager
+      - generation隔离
+    touch:
+      - 修改 app/src/main/java/com/bychat/app/network/SessionContract.kt
+      - 修改 app/src/main/java/com/bychat/app/network/V2ClientSession.kt
+      - 新增 app/src/test/java/com/bychat/app/network/V2ClientSessionTlsTest.kt
+    must_not_touch:
+      - 旧ChatClient
+      - 明文降级逻辑
+    boundary:
+      - FIRST_SEEN不是Ready，也不能发送认证数据
+      - 指纹变化不得进入自动重连循环
+    expected_result:
+      - v2会话先建立TLS和服务器信任，再进行协议与身份认证
+      - 无法被网络错误诱导降级明文
+    minimal_self_check:
+      - 测试断言HELLO在信任前零发送
+      - 测试覆盖信任、拒绝、指纹变化、TLS失败和generation失效
+
+  - id: I03-S21
+    backlog:
+      - P02-E02-T03
+      - P02-E02-T04
+      - P02-E02-T05
+    title: 实现protocol-v2安全认证服务端会话
+    objective: 手机主机真正处理挑战、签名和令牌恢复，而不是继续依赖旧credential
+    what_to_do:
+      - 在v2服务端连接处理器中HELLO后发送AUTH_CHALLENGE或处理RESUME_REQUEST
+      - AUTH_REQUEST交给ServerAuthVerifier
+      - 成功后由SessionTokenService签发令牌并发送AUTH_RESULT
+      - RESUME_REQUEST由SessionTokenService验证并轮换令牌
+      - 认证前拒绝MESSAGE_SEND、SYNC_REQUEST和ADMIN_COMMAND
+      - 认证成功后绑定connection到userId和communityId，不信任客户端sender字段
+      - 连接关闭不立即撤销恢复令牌，显式logout才撤销
+      - 认证失败使用统一错误，不泄露用户是否注册
+    technology:
+      - v2服务端连接状态机
+      - ChallengeStore
+      - ServerAuthVerifier
+      - SessionTokenService
+    touch:
+      - 修改I02后实际存在的v2服务端连接处理文件
+      - 新增 app/src/test/java/com/bychat/app/server/V2ServerAuthenticationTest.kt
+    must_not_touch:
+      - 旧ChatServer的legacy端口行为
+      - 客户端提交的sender不得写入服务器身份
+    boundary:
+      - 若I02结束时仍没有v2服务端，本步骤必须先实现独立V2ServerConnection，不能把安全认证硬塞入旧ChatServer
+      - legacy和v2必须通过端口、协议探测或明确配置隔离，禁止同一流猜测后回退
+    expected_result:
+      - 手机设备上的v2服务器真实验证Ed25519身份并签发会话
+      - 未认证连接不能聊天
+    minimal_self_check:
+      - 测试覆盖注册、登录、恢复、重放、未认证发消息、伪造sender和logout撤销
+      - 测试使用真实回环Socket或确定性内存传输
+
+  - id: I03-S22
+    backlog:
+      - P02-E02-T05
+    title: 切断v2链路中的旧credential传输
+    objective: 新协议运行时不再把本地密码派生值发给服务器
+    what_to_do:
+      - 审计protocol-v2 payload、ConnectionRequest、AuthProvider和日志
+      - 删除v2代码中username加credential认证字段和适配
+      - 保留legacy Packet字段仅供旧链路兼容，并加Deprecated注解及迁移说明
+      - 新建静态测试扫描v2和network生产源码，发现credential或password字段即失败
+      - 捕获回环网络字节并断言不含旧credential、密码和passwordHash
+    technology:
+      - 源码边界测试
+      - 回环集成测试
+    touch:
+      - 修改 app/src/main/java/com/bychat/app/Models.kt，仅给旧Packet添加Deprecated与说明
+      - 新增 app/src/test/java/com/bychat/app/security/NoLegacyCredentialLeakTest.kt
+      - 修改 docs/protocol-v2.md
+    must_not_touch:
+      - legacy链路运行能力，直到后续正式迁移完成
+    boundary:
+      - 不允许用“编码”或“哈希”冒充不传凭据
+      - v2网络只能出现公钥、挑战签名和短期会话token
+    expected_result:
+      - v2认证完全脱离本地密码派生值
+      - 旧协议被明确标记为待移除兼容层
+    minimal_self_check:
+      - ./gradlew testDebugUnitTest --tests '*NoLegacyCredentialLeakTest'通过
+      - grep -R -Ei 'credential|passwordHash' v2与network生产目录无输出
+
+  - id: I03-S23
+    backlog:
+      - P02-E01-T03
+      - P02-E01-T04
+      - P02-E02-T01
+      - P02-E02-T02
+      - P02-E02-T03
+      - P02-E02-T04
+    title: 安全失败与并发攻击测试
+    objective: 验证实现面对篡改、重放、并发和资源压力时受控失败
+    what_to_do:
+      - 固定种子篡改EncryptedBlob的每个字段并断言解密失败
+      - 并发提交同一挑战100次并断言仅一次成功
+      - 并发轮换同一令牌并断言仅一个新令牌有效
+      - 生成过期、未来、错服务器、错社区、错用户挑战并全部拒绝
+      - 模拟Keystore密钥丢失、数据库密文损坏和事务中断
+      - 模拟TLS指纹变化并断言认证包零发送
+      - 所有测试设置超时且不访问公网
+    technology:
+      - JUnit4并发测试
+      - CountDownLatch
+      - 本地TLS服务器
+      - Fake时钟
+    touch:
+      - 新增 app/src/test/java/com/bychat/app/security/SecurityFailureTest.kt
+      - 新增 app/src/test/java/com/bychat/app/auth/AuthConcurrencyTest.kt
+    must_not_touch:
+      - 生产代码；发现缺陷回到责任步骤单独修复
+    boundary:
+      - 禁止catch Throwable后无条件通过
+      - 禁止Thread.sleep作为同步依据
+    expected_result:
+      - 篡改和重放全部失败
+      - 并发状态不存在双重消费与双重轮换
+    minimal_self_check:
+      - 两文件测试总数不少于15
+      - 所有并发测试有5秒以内超时
+
+  - id: I03-S24
+    backlog:
+      - P01-E04-T01
+      - P01-E04-T02
+      - P01-E04-T03
+      - P02-E01-T01
+      - P02-E01-T03
+      - P02-E01-T04
+      - P02-E02-T01
+      - P02-E02-T02
+      - P02-E02-T03
+      - P02-E02-T04
+      - P02-E02-T05
+    title: I03集成验收与安全边界审计
+    objective: 证明TLS、TOFU、身份、迁移和令牌形成完整闭环且未破坏旧数据
+    what_to_do:
+      - 更新docs/security-identity-v1.md为最终实现字段
+      - 更新docs/protocol-v2.md认证时序
+      - 更新BACKLOG对应任务为done，仅在全部门禁通过后执行
+      - 在本文件completion记录提交、测试数量、APK和Actions结果
+      - 运行全量单元测试、assembleDebug、assembleRelease和assembleAndroidTest
+      - 从v1数据库样本升级并验证账号、远程用户和消息行完整
+      - 使用回环TLS完成首次确认、注册、断开、恢复和注销端到端测试
+      - 搜索源码与构建产物中的测试私钥、固定令牌、密码和旧credential泄露
+      - 审计本迭代所有修改文件是否超出边界
+      - 推送并等待GitHub Actions成功后才能标记完成
+    technology:
+      - Gradle
+      - Git diff审计
+      - 回环TLS集成测试
+      - GitHub Actions
+    touch:
+      - 修改 docs/security-identity-v1.md
+      - 修改 docs/protocol-v2.md
+      - 修改 BACKLOG.yaml对应状态
+      - 修改 steps/I03-secure-identity-tls.yaml completion
+    must_not_touch:
+      - 不新增功能
+      - 不跳过失败测试
+      - 不删除失败测试以通过构建
+    boundary:
+      - Actions未成功时status保持active
+      - Android instrumentation未实机运行时必须标记pending，不能伪报通过
+    expected_result:
+      - v2客户端到v2手机主机全程TLS并使用Ed25519身份
+      - 首次指纹需确认、变化被阻断
+      - 本地敏感材料加密、服务端令牌仅哈希存储
+      - 旧用户与旧消息无损迁移
+    minimal_self_check:
+      - ./gradlew testDebugUnitTest assembleDebug assembleRelease assembleAndroidTest --no-daemon
+      - grep -R -nE 'TODO|FIXME|NotImplementedError|TrustAll|ALLOW_ALL' app/src/main app/src/test无输出
+      - git diff --check无输出
+      - test -f app/build/outputs/apk/debug/app-debug.apk
+
+execution_batches:
+  - id: I03-B01
+    name: 密码学与数据基础
+    steps:
+      - I03-S01
+      - I03-S02
+      - I03-S03
+      - I03-S04
+      - I03-S05
+    gate:
+      - Ed25519 smoke test通过
+      - KDF、Keystore包装和本地AES-GCM测试通过
+  - id: I03-B02
+    name: 身份数据库与账号迁移
+    steps:
+      - I03-S06
+      - I03-S07
+      - I03-S08
+      - I03-S09
+      - I03-S10
+    gate:
+      - v1到v2迁移无数据丢失
+      - 新账号与旧账号迁移均生成加密身份
+  - id: I03-B03
+    name: 挑战签名与令牌
+    steps:
+      - I03-S11
+      - I03-S12
+      - I03-S13
+      - I03-S14
+      - I03-S15
+      - I03-S16
+    gate:
+      - 挑战一次消费
+      - Ed25519认证闭环
+      - 令牌哈希存储与安全恢复
+  - id: I03-B04
+    name: TLS与服务器信任
+    steps:
+      - I03-S17
+      - I03-S18
+      - I03-S19
+      - I03-S20
+    gate:
+      - TLS握手成功
+      - 首次确认前零认证数据
+      - 指纹变化阻断
+  - id: I03-B05
+    name: 服务端接线与验收
+    steps:
+      - I03-S21
+      - I03-S22
+      - I03-S23
+      - I03-S24
+    gate:
+      - v2手机主机真实完成安全认证
+      - 旧credential不进入v2网络
+      - 全量测试与APK构建成功
+
+verification_commands:
+  structure: grep -R -nE 'TODO|FIXME|NotImplementedError|TrustAll|ALLOW_ALL' app/src/main app/src/test
+  insecure_random: grep -R -n 'java.util.Random' app/src/main/java/com/bychat/app/security app/src/main/java/com/bychat/app/auth app/src/main/java/com/bychat/app/identity
+  secret_terms_in_logs: grep -R -nE 'Log\..*(password|credential|privateKey|sessionToken|signature)|BLog\..*(password|credential|privateKey|sessionToken|signature)' app/src/main/java
+  tests: ./gradlew testDebugUnitTest --no-daemon
+  builds: ./gradlew assembleDebug assembleRelease assembleAndroidTest --no-daemon
+  diff: git diff --check
+  apk: test -f app/build/outputs/apk/debug/app-debug.apk
+
+token_efficient_review:
+  - 正常步骤只输出修改文件列表、测试通过数和提交号
+  - 编译失败只读取第一个error对应文件前后25行
+  - 测试失败只重跑失败测试类
+  - 数据迁移用表行数和哈希核对，不回显敏感内容
+  - 安全审计只输出命中文件和行号，不输出秘密字段值
+  - 最终只报告单元测试数、迁移测试结果、APK路径、提交号和Actions状态
+
+completion:
+  status: pending
+  blocked_by: I02尚未全部完成
+  started_from: null
+  finished_at_commit: null
+  unit_tests: pending
+  instrumentation_tests: pending
+  database_migration: pending
+  github_actions: pending
+  apk: pending
