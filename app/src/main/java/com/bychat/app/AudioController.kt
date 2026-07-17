@@ -26,13 +26,21 @@ class AudioController(private val context: Context) {
         true
     } catch (_: Exception) { cancel(); false }
 
-    fun stop(): String? = try {
-        recorder?.stop()
-        recorder?.release()
-        recorder = null
-        val file = output ?: return null
-        if (file.length() !in 1..2_000_000) null else Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
-    } catch (_: Exception) { null } finally { output?.delete(); output = null }
+    fun stop(): String? {
+        return try {
+            recorder?.stop()
+            recorder?.release()
+            recorder = null
+            val file = output
+            if (file == null || file.length() !in 1..2_000_000) null
+            else Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
+        } catch (_: Exception) {
+            null
+        } finally {
+            output?.delete()
+            output = null
+        }
+    }
 
     fun cancel() {
         runCatching { recorder?.stop() }
