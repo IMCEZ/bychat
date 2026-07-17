@@ -1,0 +1,1246 @@
+project: Bychat
+source: ROADMAP.yaml
+status_values:
+  - pending
+  - active
+  - blocked
+  - done
+priority_values:
+  - critical
+  - high
+  - medium
+  - low
+
+definition_of_done:
+  - 功能实现完整且无占位代码
+  - 单元测试和必要的集成测试通过
+  - Debug APK构建通过
+  - 数据库与协议变更具备兼容或迁移方案
+  - 用户可见功能具有中文错误提示
+  - 安全边界和输入限制已落实
+
+parts:
+  P01:
+    name: 核心架构与协议重构
+    epics:
+      - id: P01-E01
+        name: 模块边界重构
+        tasks:
+          - id: P01-E01-T01
+            name: 将现有源码划分为domain、data、network、server、service和ui包
+            priority: high
+            status: pending
+          - id: P01-E01-T02
+            name: 提取客户端会话接口并解除Activity与Socket直接耦合
+            priority: critical
+            status: pending
+          - id: P01-E01-T03
+            name: 提取手机主机接口并解除Service与具体服务器实现耦合
+            priority: high
+            status: pending
+          - id: P01-E01-T04
+            name: 建立统一错误类型、结果类型和日志接口
+            priority: high
+            status: pending
+      - id: P01-E02
+        name: protocol-v2数据模型
+        tasks:
+          - id: P01-E02-T01
+            name: 定义协议版本、客户端版本和服务器能力字段
+            priority: critical
+            status: pending
+          - id: P01-E02-T02
+            name: 定义请求ID、响应ID、事件ID和标准时间格式
+            priority: critical
+            status: pending
+          - id: P01-E02-T03
+            name: 定义握手、认证、消息、同步、成员和管理数据包
+            priority: critical
+            status: pending
+          - id: P01-E02-T04
+            name: 定义稳定错误码、可重试标识和用户提示字段
+            priority: high
+            status: pending
+          - id: P01-E02-T05
+            name: 编写protocol-v2中文规范与示例数据包
+            priority: high
+            status: pending
+      - id: P01-E03
+        name: 传输与连接可靠性
+        tasks:
+          - id: P01-E03-T01
+            name: 实现长度前缀帧协议并限制单帧大小
+            priority: critical
+            status: pending
+          - id: P01-E03-T02
+            name: 实现连接、握手、认证、就绪和关闭状态机
+            priority: critical
+            status: pending
+          - id: P01-E03-T03
+            name: 实现心跳、读写超时和僵尸连接清理
+            priority: critical
+            status: pending
+          - id: P01-E03-T04
+            name: 实现指数退避、随机抖动和网络恢复重连
+            priority: high
+            status: pending
+          - id: P01-E03-T05
+            name: 实现会话恢复令牌和最后同步游标恢复
+            priority: high
+            status: pending
+          - id: P01-E03-T06
+            name: 支持域名、IPv4、IPv6和连接取消
+            priority: high
+            status: pending
+      - id: P01-E04
+        name: 传输安全与防护
+        tasks:
+          - id: P01-E04-T01
+            name: 为公网连接实现TLS套接字
+            priority: critical
+            status: pending
+          - id: P01-E04-T02
+            name: 实现首次连接服务器指纹确认和持久化
+            priority: critical
+            status: pending
+          - id: P01-E04-T03
+            name: 实现指纹变化阻断和风险提示
+            priority: critical
+            status: pending
+          - id: P01-E04-T04
+            name: 限制连接数、数据包速率、帧长度和解析深度
+            priority: critical
+            status: pending
+          - id: P01-E04-T05
+            name: 为协议解析和异常断开编写测试
+            priority: high
+            status: pending
+
+  P02:
+    name: 本地身份与服务器身份
+    epics:
+      - id: P02-E01
+        name: 本地账号管理
+        tasks:
+          - id: P02-E01-T01
+            name: 设计多账号表和账号会话表
+            priority: critical
+            status: pending
+          - id: P02-E01-T02
+            name: 实现创建、登录、切换、退出和删除账号
+            priority: high
+            status: pending
+          - id: P02-E01-T03
+            name: 使用Android Keystore保护本地主密钥
+            priority: critical
+            status: pending
+          - id: P02-E01-T04
+            name: 使用安全密码派生参数加密账号私密数据
+            priority: critical
+            status: pending
+          - id: P02-E01-T05
+            name: 实现登录失败延迟和本地尝试限制
+            priority: high
+            status: pending
+      - id: P02-E02
+        name: 去中心化身份
+        tasks:
+          - id: P02-E02-T01
+            name: 为每个账号生成Ed25519身份密钥对
+            priority: critical
+            status: pending
+          - id: P02-E02-T02
+            name: 以公钥指纹生成稳定用户身份ID
+            priority: critical
+            status: pending
+          - id: P02-E02-T03
+            name: 实现服务器挑战签名注册与登录
+            priority: critical
+            status: pending
+          - id: P02-E02-T04
+            name: 实现会话令牌签发、轮换、过期和注销
+            priority: critical
+            status: pending
+          - id: P02-E02-T05
+            name: 移除跨网络发送本地密码派生值的旧流程
+            priority: critical
+            status: pending
+      - id: P02-E03
+        name: 用户资料
+        tasks:
+          - id: P02-E03-T01
+            name: 实现全局账号名称和头像
+            priority: medium
+            status: pending
+          - id: P02-E03-T02
+            name: 实现每服务器昵称、头像和简介
+            priority: high
+            status: pending
+          - id: P02-E03-T03
+            name: 实现昵称规则、重名展示和身份ID查看
+            priority: medium
+            status: pending
+          - id: P02-E03-T04
+            name: 实现拉黑用户和解除拉黑
+            priority: high
+            status: pending
+      - id: P02-E04
+        name: 迁移与恢复
+        tasks:
+          - id: P02-E04-T01
+            name: 设计加密账号备份文件格式
+            priority: high
+            status: pending
+          - id: P02-E04-T02
+            name: 实现备份密码加密导出
+            priority: high
+            status: pending
+          - id: P02-E04-T03
+            name: 实现导入校验、冲突处理和恢复
+            priority: high
+            status: pending
+          - id: P02-E04-T04
+            name: 编写错误密码、损坏备份和跨设备恢复测试
+            priority: high
+            status: pending
+
+  P03:
+    name: 社区、频道与成员模型
+    epics:
+      - id: P03-E01
+        name: 社区模型
+        tasks:
+          - id: P03-E01-T01
+            name: 定义社区ID、名称、图标、介绍、所有者和创建时间
+            priority: critical
+            status: pending
+          - id: P03-E01-T02
+            name: 实现创建、编辑、转让和解散社区
+            priority: high
+            status: pending
+          - id: P03-E01-T03
+            name: 强制手机主机仅允许一个社区
+            priority: critical
+            status: pending
+          - id: P03-E01-T04
+            name: 为外部服务器保留多社区路由能力
+            priority: high
+            status: pending
+      - id: P03-E02
+        name: 分类与频道
+        tasks:
+          - id: P03-E02-T01
+            name: 定义分类、文字频道、公告频道和私密频道模型
+            priority: critical
+            status: pending
+          - id: P03-E02-T02
+            name: 实现频道创建、编辑、删除和排序
+            priority: high
+            status: pending
+          - id: P03-E02-T03
+            name: 实现分类创建、折叠和排序
+            priority: medium
+            status: pending
+          - id: P03-E02-T04
+            name: 实现默认频道和删除保护
+            priority: high
+            status: pending
+          - id: P03-E02-T05
+            name: 实现频道可见性与访问权限检查
+            priority: critical
+            status: pending
+      - id: P03-E03
+        name: 邀请与加入
+        tasks:
+          - id: P03-E03-T01
+            name: 定义服务器地址、社区ID和邀请码组合格式
+            priority: high
+            status: pending
+          - id: P03-E03-T02
+            name: 实现邀请创建、过期时间和次数限制
+            priority: high
+            status: pending
+          - id: P03-E03-T03
+            name: 实现邀请撤销和使用记录
+            priority: medium
+            status: pending
+          - id: P03-E03-T04
+            name: 实现手动输入、链接解析和加入预览
+            priority: high
+            status: pending
+      - id: P03-E04
+        name: 成员管理
+        tasks:
+          - id: P03-E04-T01
+            name: 实现成员列表、搜索和资料页
+            priority: high
+            status: pending
+          - id: P03-E04-T02
+            name: 实现成员加入时间、角色和状态展示
+            priority: medium
+            status: pending
+          - id: P03-E04-T03
+            name: 实现主动退出和重新加入
+            priority: high
+            status: pending
+          - id: P03-E04-T04
+            name: 实现所有者无法直接退出的转让约束
+            priority: high
+            status: pending
+
+  P04:
+    name: 角色、权限与社区治理
+    epics:
+      - id: P04-E01
+        name: 角色系统
+        tasks:
+          - id: P04-E01-T01
+            name: 定义权限位集合和默认角色
+            priority: critical
+            status: pending
+          - id: P04-E01-T02
+            name: 实现自定义角色创建、编辑、删除和排序
+            priority: high
+            status: pending
+          - id: P04-E01-T03
+            name: 实现成员角色授予和撤销
+            priority: high
+            status: pending
+          - id: P04-E01-T04
+            name: 实现角色层级约束，禁止越权管理
+            priority: critical
+            status: pending
+      - id: P04-E02
+        name: 权限计算
+        tasks:
+          - id: P04-E02-T01
+            name: 实现社区级基础权限计算
+            priority: critical
+            status: pending
+          - id: P04-E02-T02
+            name: 实现频道级角色允许与拒绝覆盖
+            priority: critical
+            status: pending
+          - id: P04-E02-T03
+            name: 实现频道级成员允许与拒绝覆盖
+            priority: critical
+            status: pending
+          - id: P04-E02-T04
+            name: 实现所有者绕过规则与管理员边界
+            priority: critical
+            status: pending
+          - id: P04-E02-T05
+            name: 编写权限矩阵测试
+            priority: critical
+            status: pending
+      - id: P04-E03
+        name: 处罚与审核
+        tasks:
+          - id: P04-E03-T01
+            name: 实现踢出和带原因封禁
+            priority: high
+            status: pending
+          - id: P04-E03-T02
+            name: 实现临时封禁和自动解除
+            priority: medium
+            status: pending
+          - id: P04-E03-T03
+            name: 实现全局禁言和频道禁言
+            priority: high
+            status: pending
+          - id: P04-E03-T04
+            name: 实现慢速模式、频道锁定和只读模式
+            priority: high
+            status: pending
+          - id: P04-E03-T05
+            name: 实现封禁列表、修改原因和解除处罚
+            priority: medium
+            status: pending
+      - id: P04-E04
+        name: 审计与防滥用
+        tasks:
+          - id: P04-E04-T01
+            name: 记录角色、频道、消息和处罚管理操作
+            priority: high
+            status: pending
+          - id: P04-E04-T02
+            name: 实现审计日志分页、筛选和查看详情
+            priority: medium
+            status: pending
+          - id: P04-E04-T03
+            name: 实现敏感词、重复消息和高频发言规则
+            priority: medium
+            status: pending
+          - id: P04-E04-T04
+            name: 实现举报提交、处理和结果记录
+            priority: medium
+            status: pending
+
+  P05:
+    name: 完整消息系统
+    epics:
+      - id: P05-E01
+        name: 消息基础
+        tasks:
+          - id: P05-E01-T01
+            name: 定义全局消息ID、服务器序列号和客户端临时ID
+            priority: critical
+            status: pending
+          - id: P05-E01-T02
+            name: 实现发送确认、失败、重试和幂等去重
+            priority: critical
+            status: pending
+          - id: P05-E01-T03
+            name: 实现安全文本渲染和链接识别
+            priority: high
+            status: pending
+          - id: P05-E01-T04
+            name: 实现消息长度、频率和空白内容校验
+            priority: high
+            status: pending
+          - id: P05-E01-T05
+            name: 实现游标分页与向上加载历史记录
+            priority: critical
+            status: pending
+      - id: P05-E02
+        name: 消息操作
+        tasks:
+          - id: P05-E02-T01
+            name: 实现回复和引用预览
+            priority: high
+            status: pending
+          - id: P05-E02-T02
+            name: 实现消息编辑和编辑标记
+            priority: high
+            status: pending
+          - id: P05-E02-T03
+            name: 实现撤回、用户删除和管理员删除
+            priority: high
+            status: pending
+          - id: P05-E02-T04
+            name: 实现跨频道转发与来源标记
+            priority: medium
+            status: pending
+          - id: P05-E02-T05
+            name: 实现消息置顶、取消置顶和置顶列表
+            priority: medium
+            status: pending
+      - id: P05-E03
+        name: 互动与提醒
+        tasks:
+          - id: P05-E03-T01
+            name: 实现Emoji回应添加、移除和成员列表
+            priority: medium
+            status: pending
+          - id: P05-E03-T02
+            name: 实现@成员、@角色和权限校验
+            priority: high
+            status: pending
+          - id: P05-E03-T03
+            name: 实现频道未读计数和最后阅读位置
+            priority: critical
+            status: pending
+          - id: P05-E03-T04
+            name: 实现提及计数和跳转到提及消息
+            priority: high
+            status: pending
+          - id: P05-E03-T05
+            name: 实现每频道输入草稿
+            priority: medium
+            status: pending
+      - id: P05-E04
+        name: 私聊与群聊
+        tasks:
+          - id: P05-E04-T01
+            name: 定义私聊会话和参与者模型
+            priority: high
+            status: pending
+          - id: P05-E04-T02
+            name: 实现发起私聊、私聊列表和消息同步
+            priority: high
+            status: pending
+          - id: P05-E04-T03
+            name: 实现小型群聊创建、改名和成员管理
+            priority: medium
+            status: pending
+          - id: P05-E04-T04
+            name: 实现陌生人私聊权限和拉黑拦截
+            priority: high
+            status: pending
+      - id: P05-E05
+        name: 搜索
+        tasks:
+          - id: P05-E05-T01
+            name: 建立消息全文搜索索引
+            priority: high
+            status: pending
+          - id: P05-E05-T02
+            name: 支持关键字、发送者、频道和时间筛选
+            priority: medium
+            status: pending
+          - id: P05-E05-T03
+            name: 实现搜索结果高亮与定位原消息
+            priority: medium
+            status: pending
+
+  P06:
+    name: 语音、图片与文件媒体
+    epics:
+      - id: P06-E01
+        name: 媒体传输协议
+        tasks:
+          - id: P06-E01-T01
+            name: 定义上传初始化、分块、完成和取消数据包
+            priority: critical
+            status: pending
+          - id: P06-E01-T02
+            name: 实现分块校验值、总大小和MIME类型验证
+            priority: critical
+            status: pending
+          - id: P06-E01-T03
+            name: 实现上传进度、失败重试和断点续传
+            priority: high
+            status: pending
+          - id: P06-E01-T04
+            name: 实现授权下载、Range读取和缓存校验
+            priority: high
+            status: pending
+          - id: P06-E01-T05
+            name: 移除旧Base64整包语音协议
+            priority: critical
+            status: pending
+      - id: P06-E02
+        name: 语音消息
+        tasks:
+          - id: P06-E02-T01
+            name: 实现录音计时、暂停、继续、取消和试听
+            priority: high
+            status: pending
+          - id: P06-E02-T02
+            name: 生成语音时长和波形摘要
+            priority: medium
+            status: pending
+          - id: P06-E02-T03
+            name: 实现播放进度、暂停和倍速
+            priority: high
+            status: pending
+          - id: P06-E02-T04
+            name: 实现听筒与扬声器切换
+            priority: medium
+            status: pending
+      - id: P06-E03
+        name: 图片消息
+        tasks:
+          - id: P06-E03-T01
+            name: 实现系统相册选择和拍照权限流程
+            priority: high
+            status: pending
+          - id: P06-E03-T02
+            name: 实现尺寸读取、方向修正、压缩和缩略图
+            priority: high
+            status: pending
+          - id: P06-E03-T03
+            name: 实现聊天内预览、缩放和保存
+            priority: high
+            status: pending
+          - id: P06-E03-T04
+            name: 清除图片元数据中的敏感位置字段
+            priority: high
+            status: pending
+      - id: P06-E04
+        name: 文件消息与空间管理
+        tasks:
+          - id: P06-E04-T01
+            name: 实现文件选择、文件名清理和大小限制
+            priority: high
+            status: pending
+          - id: P06-E04-T02
+            name: 实现下载确认、进度、打开和失败处理
+            priority: high
+            status: pending
+          - id: P06-E04-T03
+            name: 实现服务器媒体引用计数和孤立文件清理
+            priority: high
+            status: pending
+          - id: P06-E04-T04
+            name: 实现客户端缓存上限、自动淘汰和手动清理
+            priority: medium
+            status: pending
+
+  P07:
+    name: 本地存储、同步与备份
+    epics:
+      - id: P07-E01
+        name: 数据库v2
+        tasks:
+          - id: P07-E01-T01
+            name: 定义账号、服务器、社区、频道、成员、角色和消息表
+            priority: critical
+            status: pending
+          - id: P07-E01-T02
+            name: 定义索引、外键、唯一约束和删除规则
+            priority: critical
+            status: pending
+          - id: P07-E01-T03
+            name: 实现数据库事务执行器和后台线程访问
+            priority: critical
+            status: pending
+          - id: P07-E01-T04
+            name: 实现当前数据库到v2的无损迁移
+            priority: critical
+            status: pending
+          - id: P07-E01-T05
+            name: 编写升级、降级阻断和迁移回滚测试
+            priority: critical
+            status: pending
+      - id: P07-E02
+        name: 增量同步
+        tasks:
+          - id: P07-E02-T01
+            name: 为社区事件分配连续服务器序列号
+            priority: critical
+            status: pending
+          - id: P07-E02-T02
+            name: 保存每社区最后应用游标
+            priority: critical
+            status: pending
+          - id: P07-E02-T03
+            name: 实现断线后的增量事件补拉
+            priority: critical
+            status: pending
+          - id: P07-E02-T04
+            name: 检测序列缺口并触发范围修复
+            priority: critical
+            status: pending
+          - id: P07-E02-T05
+            name: 实现全量快照恢复与增量衔接
+            priority: high
+            status: pending
+      - id: P07-E03
+        name: 历史与空间策略
+        tasks:
+          - id: P07-E03-T01
+            name: 实现消息保留天数和最大消息数设置
+            priority: medium
+            status: pending
+          - id: P07-E03-T02
+            name: 实现服务器磁盘配额和低空间保护
+            priority: high
+            status: pending
+          - id: P07-E03-T03
+            name: 实现分页清理，避免长事务阻塞
+            priority: high
+            status: pending
+          - id: P07-E03-T04
+            name: 实现数据库一致性检查和索引重建
+            priority: medium
+            status: pending
+      - id: P07-E04
+        name: 数据备份
+        tasks:
+          - id: P07-E04-T01
+            name: 实现服务器配置、数据库和媒体清单导出
+            priority: high
+            status: pending
+          - id: P07-E04-T02
+            name: 实现加密备份和完整性校验
+            priority: high
+            status: pending
+          - id: P07-E04-T03
+            name: 实现恢复预检、版本检查和原子替换
+            priority: high
+            status: pending
+          - id: P07-E04-T04
+            name: 编写备份恢复往返测试
+            priority: high
+            status: pending
+
+  P08:
+    name: 手机自建服务器与公网可用性
+    epics:
+      - id: P08-E01
+        name: 创建服务器向导
+        tasks:
+          - id: P08-E01-T01
+            name: 实现社区信息、端口、密码和限制分步配置
+            priority: high
+            status: pending
+          - id: P08-E01-T02
+            name: 启动前检测端口占用和存储空间
+            priority: critical
+            status: pending
+          - id: P08-E01-T03
+            name: 展示局域网IPv4、IPv6和可复制连接信息
+            priority: high
+            status: pending
+          - id: P08-E01-T04
+            name: 保存主机配置并支持再次启动
+            priority: high
+            status: pending
+      - id: P08-E02
+        name: 公网诊断
+        tasks:
+          - id: P08-E02-T01
+            name: 检测网络类型、局域网地址和IPv6可用性
+            priority: high
+            status: pending
+          - id: P08-E02-T02
+            name: 检测公网地址并识别常见CGNAT网段
+            priority: high
+            status: pending
+          - id: P08-E02-T03
+            name: 提供路由器TCP端口映射中文引导
+            priority: high
+            status: pending
+          - id: P08-E02-T04
+            name: 实现外部可达性检测接口配置
+            priority: medium
+            status: pending
+          - id: P08-E02-T05
+            name: 评估并实现可用的UPnP或NAT-PMP映射
+            priority: medium
+            status: pending
+      - id: P08-E03
+        name: 主机生命周期
+        tasks:
+          - id: P08-E03-T01
+            name: 实现前台服务启动、停止和状态同步
+            priority: critical
+            status: pending
+          - id: P08-E03-T02
+            name: 实现服务器启动失败原因回传界面
+            priority: critical
+            status: pending
+          - id: P08-E03-T03
+            name: 实现进程重建后的安全恢复
+            priority: high
+            status: pending
+          - id: P08-E03-T04
+            name: 实现WiFi与移动网络切换监听
+            priority: high
+            status: pending
+          - id: P08-E03-T05
+            name: 提供电池优化和后台限制设置引导
+            priority: high
+            status: pending
+      - id: P08-E04
+        name: 运行控制台
+        tasks:
+          - id: P08-E04-T01
+            name: 展示运行时长、在线数、连接数和消息速率
+            priority: medium
+            status: pending
+          - id: P08-E04-T02
+            name: 展示上传下载流量和媒体占用
+            priority: medium
+            status: pending
+          - id: P08-E04-T03
+            name: 设置最大连接数、上传限制和消息速率
+            priority: high
+            status: pending
+          - id: P08-E04-T04
+            name: 实现只读、关闭注册和紧急停服开关
+            priority: high
+            status: pending
+
+  P09:
+    name: 外部服务器实现
+    epics:
+      - id: P09-E01
+        name: 服务端工程基础
+        tasks:
+          - id: P09-E01-T01
+            name: 确定服务端语言、运行时和目录结构
+            priority: critical
+            status: pending
+          - id: P09-E01-T02
+            name: 实现protocol-v2连接与认证服务
+            priority: critical
+            status: pending
+          - id: P09-E01-T03
+            name: 实现多社区路由和隔离
+            priority: critical
+            status: pending
+          - id: P09-E01-T04
+            name: 实现配置文件、环境变量和启动参数
+            priority: high
+            status: pending
+          - id: P09-E01-T05
+            name: 实现优雅启动、关闭和信号处理
+            priority: high
+            status: pending
+      - id: P09-E02
+        name: 服务端持久化
+        tasks:
+          - id: P09-E02-T01
+            name: 实现服务器数据库结构与迁移命令
+            priority: critical
+            status: pending
+          - id: P09-E02-T02
+            name: 实现消息、成员、权限和审计存储
+            priority: critical
+            status: pending
+          - id: P09-E02-T03
+            name: 实现媒体文件安全存储
+            priority: high
+            status: pending
+          - id: P09-E02-T04
+            name: 实现备份、恢复和数据校验命令
+            priority: high
+            status: pending
+      - id: P09-E03
+        name: 部署与运维
+        tasks:
+          - id: P09-E03-T01
+            name: 构建多架构Docker镜像
+            priority: high
+            status: pending
+          - id: P09-E03-T02
+            name: 提供docker-compose部署文件
+            priority: high
+            status: pending
+          - id: P09-E03-T03
+            name: 编写域名、TLS和反向代理部署文档
+            priority: high
+            status: pending
+          - id: P09-E03-T04
+            name: 实现健康检查、结构化日志和日志轮转
+            priority: high
+            status: pending
+          - id: P09-E03-T05
+            name: 实现CPU、内存、连接和磁盘资源限制
+            priority: medium
+            status: pending
+      - id: P09-E04
+        name: 服务端升级
+        tasks:
+          - id: P09-E04-T01
+            name: 定义服务端版本兼容策略
+            priority: high
+            status: pending
+          - id: P09-E04-T02
+            name: 实现升级前备份和数据库迁移
+            priority: high
+            status: pending
+          - id: P09-E04-T03
+            name: 编写升级与回滚操作手册
+            priority: medium
+            status: pending
+
+  P10:
+    name: Android产品界面重构
+    epics:
+      - id: P10-E01
+        name: UI基础与导航
+        tasks:
+          - id: P10-E01-T01
+            name: 建立Material 3主题、色彩、字号和间距规范
+            priority: high
+            status: pending
+          - id: P10-E01-T02
+            name: 建立Activity与Fragment导航结构
+            priority: critical
+            status: pending
+          - id: P10-E01-T03
+            name: 建立ViewModel状态保存和一次性事件处理
+            priority: critical
+            status: pending
+          - id: P10-E01-T04
+            name: 实现深色模式和系统动态颜色开关
+            priority: medium
+            status: pending
+          - id: P10-E01-T05
+            name: 统一加载、空白、错误和重试组件
+            priority: high
+            status: pending
+      - id: P10-E02
+        name: 账号与服务器界面
+        tasks:
+          - id: P10-E02-T01
+            name: 重做注册、登录和账号切换页面
+            priority: high
+            status: pending
+          - id: P10-E02-T02
+            name: 实现已加入服务器列表和状态展示
+            priority: critical
+            status: pending
+          - id: P10-E02-T03
+            name: 实现添加服务器、邀请预览和指纹确认页面
+            priority: critical
+            status: pending
+          - id: P10-E02-T04
+            name: 实现服务器编辑、排序、断开和删除入口
+            priority: medium
+            status: pending
+      - id: P10-E03
+        name: 社区主界面
+        tasks:
+          - id: P10-E03-T01
+            name: 实现社区切换栏
+            priority: high
+            status: pending
+          - id: P10-E03-T02
+            name: 实现分类和频道列表
+            priority: critical
+            status: pending
+          - id: P10-E03-T03
+            name: 实现成员抽屉和成员资料卡
+            priority: high
+            status: pending
+          - id: P10-E03-T04
+            name: 实现未读、提及和选中频道状态
+            priority: critical
+            status: pending
+      - id: P10-E04
+        name: 聊天界面
+        tasks:
+          - id: P10-E04-T01
+            name: 使用RecyclerView实现高性能消息列表
+            priority: critical
+            status: pending
+          - id: P10-E04-T02
+            name: 实现文本、系统、语音、图片和文件消息布局
+            priority: high
+            status: pending
+          - id: P10-E04-T03
+            name: 实现消息长按操作菜单
+            priority: high
+            status: pending
+          - id: P10-E04-T04
+            name: 实现回复栏、编辑栏、输入框和附件面板
+            priority: high
+            status: pending
+          - id: P10-E04-T05
+            name: 实现定位消息、日期分隔和新消息分隔线
+            priority: medium
+            status: pending
+      - id: P10-E05
+        name: 设置与无障碍
+        tasks:
+          - id: P10-E05-T01
+            name: 实现账号、聊天、存储、通知和隐私设置
+            priority: high
+            status: pending
+          - id: P10-E05-T02
+            name: 实现字体缩放、内容描述和键盘导航适配
+            priority: medium
+            status: pending
+          - id: P10-E05-T03
+            name: 实现配置变更和进程重建状态恢复
+            priority: critical
+            status: pending
+          - id: P10-E05-T04
+            name: 检查小屏、长文本和大字体布局
+            priority: high
+            status: pending
+
+  P11:
+    name: 通知、后台与在线状态
+    epics:
+      - id: P11-E01
+        name: 通知渠道与规则
+        tasks:
+          - id: P11-E01-T01
+            name: 创建消息、提及、私聊和服务器状态通知渠道
+            priority: high
+            status: pending
+          - id: P11-E01-T02
+            name: 实现Android 13通知权限流程
+            priority: high
+            status: pending
+          - id: P11-E01-T03
+            name: 实现全局、社区和频道通知级别
+            priority: high
+            status: pending
+          - id: P11-E01-T04
+            name: 实现免打扰和隐私隐藏正文
+            priority: medium
+            status: pending
+      - id: P11-E02
+        name: 消息通知体验
+        tasks:
+          - id: P11-E02-T01
+            name: 按会话分组并使用稳定通知ID
+            priority: high
+            status: pending
+          - id: P11-E02-T02
+            name: 点击通知定位社区、频道和消息
+            priority: high
+            status: pending
+          - id: P11-E02-T03
+            name: 实现通知快捷回复和已读动作
+            priority: medium
+            status: pending
+          - id: P11-E02-T04
+            name: 当前可见会话抑制重复通知
+            priority: medium
+            status: pending
+      - id: P11-E03
+        name: 后台连接
+        tasks:
+          - id: P11-E03-T01
+            name: 建立客户端前台连接服务
+            priority: critical
+            status: pending
+          - id: P11-E03-T02
+            name: 支持多服务器连接策略和资源上限
+            priority: high
+            status: pending
+          - id: P11-E03-T03
+            name: 处理网络切换、休眠唤醒和后台重连
+            priority: critical
+            status: pending
+          - id: P11-E03-T04
+            name: 实现电池优化状态检测和设置引导
+            priority: high
+            status: pending
+      - id: P11-E04
+        name: 在线状态
+        tasks:
+          - id: P11-E04-T01
+            name: 定义在线、离开、勿扰和离线状态
+            priority: medium
+            status: pending
+          - id: P11-E04-T02
+            name: 实现状态心跳和最后活跃时间
+            priority: high
+            status: pending
+          - id: P11-E04-T03
+            name: 实现隐身和关闭最后活跃展示
+            priority: medium
+            status: pending
+
+  P12:
+    name: 安全、隐私与滥用防护
+    epics:
+      - id: P12-E01
+        name: 安全设计
+        tasks:
+          - id: P12-E01-T01
+            name: 编写资产、攻击者、入口和信任边界威胁模型
+            priority: critical
+            status: pending
+          - id: P12-E01-T02
+            name: 规定客户端、手机主机和外部服务器安全基线
+            priority: critical
+            status: pending
+          - id: P12-E01-T03
+            name: 建立安全评审清单并纳入代码审查
+            priority: high
+            status: pending
+      - id: P12-E02
+        name: 认证与密钥安全
+        tasks:
+          - id: P12-E02-T01
+            name: 检查挑战随机性、时效和防重放
+            priority: critical
+            status: pending
+          - id: P12-E02-T02
+            name: 检查令牌权限、过期、轮换和吊销
+            priority: critical
+            status: pending
+          - id: P12-E02-T03
+            name: 检查Keystore密钥不可导出和异常恢复
+            priority: critical
+            status: pending
+          - id: P12-E02-T04
+            name: 实现应用锁和生物识别解锁选项
+            priority: medium
+            status: pending
+      - id: P12-E03
+        name: 输入与资源防护
+        tasks:
+          - id: P12-E03-T01
+            name: 校验所有协议枚举、长度、数量和嵌套深度
+            priority: critical
+            status: pending
+          - id: P12-E03-T02
+            name: 防止文件名注入、路径穿越和不安全URI访问
+            priority: critical
+            status: pending
+          - id: P12-E03-T03
+            name: 防止超大图片、压缩炸弹和内存耗尽
+            priority: critical
+            status: pending
+          - id: P12-E03-T04
+            name: 对登录、邀请、消息和上传实施分级限速
+            priority: critical
+            status: pending
+          - id: P12-E03-T05
+            name: 对SQLite查询和全文搜索实施复杂度限制
+            priority: high
+            status: pending
+      - id: P12-E04
+        name: 隐私与依赖
+        tasks:
+          - id: P12-E04-T01
+            name: 清理日志中的令牌、密码、私钥和消息正文
+            priority: critical
+            status: pending
+          - id: P12-E04-T02
+            name: 实现诊断日志预览和用户主动导出
+            priority: medium
+            status: pending
+          - id: P12-E04-T03
+            name: 实现本地缓存、搜索历史和登录记录清理
+            priority: medium
+            status: pending
+          - id: P12-E04-T04
+            name: 添加依赖漏洞和许可证检查
+            priority: high
+            status: pending
+          - id: P12-E04-T05
+            name: 编写隐私说明和权限用途说明
+            priority: high
+            status: pending
+
+  P13:
+    name: 测试、构建与发布工程
+    epics:
+      - id: P13-E01
+        name: 自动测试
+        tasks:
+          - id: P13-E01-T01
+            name: 建立Kotlin单元测试目录和测试规范
+            priority: critical
+            status: pending
+          - id: P13-E01-T02
+            name: 覆盖身份、权限、协议和消息状态机
+            priority: critical
+            status: pending
+          - id: P13-E01-T03
+            name: 覆盖数据库创建、升级、备份和恢复
+            priority: critical
+            status: pending
+          - id: P13-E01-T04
+            name: 建立客户端与手机主机端到端测试
+            priority: high
+            status: pending
+          - id: P13-E01-T05
+            name: 建立外部服务器协议兼容测试
+            priority: high
+            status: pending
+      - id: P13-E02
+        name: 稳定性与性能测试
+        tasks:
+          - id: P13-E02-T01
+            name: 模拟断网、切网、延迟、丢包和重复数据
+            priority: critical
+            status: pending
+          - id: P13-E02-T02
+            name: 测试大量历史消息滚动和分页
+            priority: high
+            status: pending
+          - id: P13-E02-T03
+            name: 测试并发连接、消息洪峰和大文件上传
+            priority: high
+            status: pending
+          - id: P13-E02-T04
+            name: 测试低存储、低内存和进程终止恢复
+            priority: high
+            status: pending
+      - id: P13-E03
+        name: 持续集成
+        tasks:
+          - id: P13-E03-T01
+            name: 在GitHub Actions执行编译、单元测试和静态检查
+            priority: critical
+            status: pending
+          - id: P13-E03-T02
+            name: 缓存Gradle并设置并发取消和超时
+            priority: medium
+            status: pending
+          - id: P13-E03-T03
+            name: 上传测试报告、Debug APK和映射文件
+            priority: high
+            status: pending
+          - id: P13-E03-T04
+            name: 增加依赖审查和敏感信息扫描
+            priority: high
+            status: pending
+      - id: P13-E04
+        name: 正式发布
+        tasks:
+          - id: P13-E04-T01
+            name: 创建正式签名密钥并离线备份
+            priority: critical
+            status: pending
+          - id: P13-E04-T02
+            name: 通过GitHub Secrets注入签名材料
+            priority: critical
+            status: pending
+          - id: P13-E04-T03
+            name: 配置Debug、Beta和Release构建变体
+            priority: high
+            status: pending
+          - id: P13-E04-T04
+            name: 由版本标签自动创建GitHub Release
+            priority: high
+            status: pending
+          - id: P13-E04-T05
+            name: 发布APK、SHA-256校验值和更新日志
+            priority: high
+            status: pending
+          - id: P13-E04-T06
+            name: 编写发布失败回滚和旧版恢复流程
+            priority: medium
+            status: pending
+
+iterations:
+  - id: I01
+    name: protocol-v2骨架
+    tasks:
+      - P01-E01-T01
+      - P01-E01-T02
+      - P01-E01-T04
+      - P01-E02-T01
+      - P01-E02-T02
+      - P01-E02-T03
+      - P01-E02-T04
+      - P01-E02-T05
+  - id: I02
+    name: 可靠网络会话
+    tasks:
+      - P01-E03-T01
+      - P01-E03-T02
+      - P01-E03-T03
+      - P01-E03-T04
+      - P01-E03-T05
+      - P01-E03-T06
+      - P01-E04-T04
+      - P01-E04-T05
+  - id: I03
+    name: 安全身份登录
+    tasks:
+      - P01-E04-T01
+      - P01-E04-T02
+      - P01-E04-T03
+      - P02-E01-T01
+      - P02-E01-T03
+      - P02-E01-T04
+      - P02-E02-T01
+      - P02-E02-T02
+      - P02-E02-T03
+      - P02-E02-T04
+      - P02-E02-T05
+  - id: I04
+    name: 数据库v2与迁移
+    tasks:
+      - P07-E01-T01
+      - P07-E01-T02
+      - P07-E01-T03
+      - P07-E01-T04
+      - P07-E01-T05
+  - id: I05
+    name: 增量同步闭环
+    tasks:
+      - P07-E02-T01
+      - P07-E02-T02
+      - P07-E02-T03
+      - P07-E02-T04
+      - P07-E02-T05
+
+counts:
+  parts: 13
+  epics: 54
+  tasks: 238
