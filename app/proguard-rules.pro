@@ -1,0 +1,3 @@
+-keepattributes Signature
+-keep class com.bychat.app.Message { *; }
+-keep class com.bychat.app.Packet { *; }
