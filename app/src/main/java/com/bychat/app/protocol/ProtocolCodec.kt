@@ -75,26 +75,26 @@ object ProtocolCodec {
     private fun requiredString(value: JsonObject, name: String): String = try {
         value.get(name)?.takeUnless { it.isJsonNull }?.asString
             ?.takeIf(String::isNotBlank)
-            ?: throw ProtocolException(ErrorCode.BAD_REQUEST, "缺少$name字段")
+            ?: throw ProtocolException(ErrorCode.BAD_REQUEST, "缺少${name}字段")
     } catch (error: ProtocolException) {
         throw error
     } catch (error: RuntimeException) {
-        throw ProtocolException(ErrorCode.BAD_REQUEST, "$name字段格式错误", error)
+        throw ProtocolException(ErrorCode.BAD_REQUEST, "${name}字段格式错误", error)
     }
 
     private fun requiredInt(value: JsonObject, name: String): Int = try {
-        value.get(name)?.asInt ?: throw ProtocolException(ErrorCode.BAD_REQUEST, "缺少$name字段")
+        value.get(name)?.asInt ?: throw ProtocolException(ErrorCode.BAD_REQUEST, "缺少${name}字段")
     } catch (error: ProtocolException) {
         throw error
     } catch (error: RuntimeException) {
-        throw ProtocolException(ErrorCode.BAD_REQUEST, "$name字段格式错误", error)
+        throw ProtocolException(ErrorCode.BAD_REQUEST, "${name}字段格式错误", error)
     }
 
     private fun requiredLong(value: JsonObject, name: String): Long = try {
-        value.get(name)?.asLong ?: throw ProtocolException(ErrorCode.BAD_REQUEST, "缺少$name字段")
+        value.get(name)?.asLong ?: throw ProtocolException(ErrorCode.BAD_REQUEST, "缺少${name}字段")
     } catch (error: ProtocolException) {
         throw error
     } catch (error: RuntimeException) {
-        throw ProtocolException(ErrorCode.BAD_REQUEST, "$name字段格式错误", error)
+        throw ProtocolException(ErrorCode.BAD_REQUEST, "${name}字段格式错误", error)
     }
 }
